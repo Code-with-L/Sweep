@@ -8,6 +8,13 @@ public enum ResidueKind
     File,
     RegistryKey,
     RegistryValue,
+
+    StartupEntry,
+    Service,
+    ScheduledTask,
+    Shortcut,
+    EnvironmentVariable,
+    Font,
 }
 
 public sealed class ResidueItem
@@ -21,8 +28,6 @@ public sealed class ResidueItem
 
     public long SizeBytes { get; set; }
 
-    public bool Selected { get; set; } = true;
-
     /// <summary>The token that caused this match, shown in the UI so the user can judge it.</summary>
     public string MatchedToken { get; set; } = "";
 
@@ -30,9 +35,17 @@ public sealed class ResidueItem
 
     public string? ValueName { get; init; }
 
-    public bool SelectedByDefault { get; init; } = true;
+    /// <summary>How this item must be removed. Null means "not removable".</summary>
+    public RemovalTarget? Target { get; init; }
+
+    public Confidence Confidence { get; init; } = Confidence.Safe;
+
+    /// <summary>Extra context, e.g. an orphaned service or the task's action line.</summary>
+    public string? Note { get; init; }
 
     public string SizeDisplay => SizeCalculator.Format(SizeBytes);
+
+    public bool SelectedByDefault => Confidence != Confidence.Risky;
 
     public override string ToString() => Path;
 }
@@ -92,8 +105,19 @@ public sealed class ResidueScanner
     private readonly List<ResidueItem> _results = [];
     private readonly HashSet<string> _seen = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _protected = [];
+    private readonly object _sync = new();
     private int _fileMatchCount;
     private int _registryMatchCount;
+    private readonly List<string> _warnings = [];
+    private DateTime _registryDeadline;
+
+    /// <summary>Non-fatal problems that the UI must surface instead of only logging.</summary>
+    public IReadOnlyList<string> Warnings => _warnings;
+
+    /// <summary>Hard ceiling on registry keys visited, so a broad token cannot run for hours.</summary>
+    private const int MaxRegistryKeysVisited = 250_000;
+
+    private int _registryKeysVisited;
     private long _sizeBudgetDeadline;
     private DateTime _deadline;
     private bool _capped;
@@ -196,11 +220,14 @@ public sealed class ResidueScanner
         return Task.Run(() => Scan(progress, cancellationToken), cancellationToken);
     }
 
-    private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
+private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
     {
         _results.Clear();
         _seen.Clear();
         _capped = false;
+        _warnings.Clear();
+        _fileMatchCount = 0;
+        _registryMatchCount = 0;
         _ct = cancellationToken;
 
         if (_tokens.IsEmpty)
@@ -209,17 +236,95 @@ public sealed class ResidueScanner
             return _results;
         }
 
+        _deadline = DateTime.UtcNow + TimeSpan.FromSeconds(_options.FileSeconds);
+        _registryDeadline = _deadline + TimeSpan.FromSeconds(Math.Max(15, _options.FileSeconds / 2));
+
         ScanFiles(progress, cancellationToken);
 
-        if (_options.ScanRegistry && !_capped)
+        // The registry phase must never be skipped because the file phase hit a cap.
+        // A truncated file scan is a partial result; skipping the registry entirely
+        // would silently hide every registry leftover.
+        if (_options.ScanRegistry)
         {
-            ScanRegistry(progress, cancellationToken);
+            try
+            {
+                ScanRegistry(progress, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                LogStore.Error("Registry residue scan failed", ex);
+                _warnings.Add("The registry scan failed; registry leftovers are missing from this list.");
+            }
         }
+
+        ScanArtifacts(progress, cancellationToken);
 
         // The original install folder, if it somehow survived, is always worth offering.
         AddSurvivingInstallFolder();
 
         return _results;
+    }
+
+    private void ScanArtifacts(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
+    {
+        if (!_options.ScanRegistry)
+        {
+            return;
+        }
+
+        bool allowWeak = _options.UsePublisherTokens;
+        progress?.Report(new ScanProgress("System", "Checking startup entries", _results.Count, 60));
+
+        Collect(() => SystemArtifacts.StartupEntries(_tokens, allowWeak, cancellationToken), "startup entries");
+        Collect(() => SystemArtifacts.Services(_tokens, allowWeak, cancellationToken), "services");
+        Collect(() => SystemArtifacts.ScheduledTasks(_tokens, allowWeak, cancellationToken), "scheduled tasks");
+        Collect(() => SystemArtifacts.Shortcuts(_tokens, cancellationToken), "shortcuts");
+        Collect(() => SystemArtifacts.EnvironmentVariables(_tokens, cancellationToken), "environment variables");
+        Collect(() => SystemArtifacts.Fonts(_tokens, cancellationToken), "fonts");
+    }
+
+    /// <summary>
+    /// Adds items from a targeted scanner. Failures are surfaced as warnings rather than
+    /// aborting the whole scan, and counted against the registry match cap.
+    /// </summary>
+    private void Collect(Func<IEnumerable<ResidueItem>> produce, string label)
+    {
+        try
+        {
+            foreach (var item in produce())
+            {
+                if (_capped)
+                {
+                    return;
+                }
+
+                if (_seen.Add(item.Path))
+                {
+                    if (_registryMatchCount >= _options.MaxRegistryMatches)
+                    {
+                        _capped = true;
+                        LogStore.Warn($"Match limit of {_options.MaxRegistryMatches} reached; results are partial.");
+                        return;
+                    }
+
+                    _registryMatchCount++;
+                    _results.Add(item);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogStore.Warn($"Could not scan {label}: {ex.Message}");
+            _warnings.Add($"Could not scan {label}.");
+        }
     }
 
     // ---- Filesystem -----------------------------------------------------
@@ -411,10 +516,12 @@ if (isDirectory)
             Path = path,
             DisplayName = name,
             SizeBytes = size,
-            MatchedToken = match,
+MatchedToken = match,
+            Target = new FileTarget(path),
+            Confidence = Confidence.Safe,
         });
 
-        _progress?.Report(new ScanProgress("Files", $"{rootLabel}: {name}", _results.Count, 0));
+        _progress?.Report(new ScanProgress("Files", $"{rootLabel}: {name}", _results.Count, 55));
     }
 
     private void AddFile(string path, string name, string match)
@@ -440,7 +547,9 @@ if (isDirectory)
             Path = path,
             DisplayName = name,
             SizeBytes = size,
-            MatchedToken = match,
+MatchedToken = match,
+            Target = new FileTarget(path),
+            Confidence = Confidence.Moderate,
         });
     }
 
@@ -454,8 +563,26 @@ if (isDirectory)
 
         try
         {
-            location = location.Trim().Trim('"');
+            location = Environment.ExpandEnvironmentVariables(location.Trim().Trim('"'));
             if (!Directory.Exists(location))
+            {
+                return;
+            }
+
+            // The install folder is force-added without needing a token match, so it must
+            // be held to the same safety bar as every other result. InstallLocation is
+            // routinely a shared location such as "C:\ProgramData\Package Cache\{GUID}"
+            // or "C:\Windows\System32", and offering those for deletion would be
+            // catastrophic.
+            if (IsProtected(location))
+            {
+                LogStore.Warn($"Install location '{location}' is a protected shared location; not offering it for removal.");
+                _warnings.Add($"Install location '{location}' is a shared/protected location and was excluded.");
+                return;
+            }
+
+            string leaf = Path.GetFileName(location.TrimEnd('\\'));
+            if (ExcludedLeafNames.Contains(leaf))
             {
                 return;
             }
@@ -469,14 +596,16 @@ if (isDirectory)
             {
                 Kind = ResidueKind.Folder,
                 Path = location,
-                DisplayName = Path.GetFileName(location.TrimEnd('\\')) + " (original install folder)",
+                DisplayName = leaf + " (original install folder)",
                 SizeBytes = SizeCalculator.GetDirectorySize(location, TimeSpan.FromSeconds(3)),
                 MatchedToken = "install location",
+                Target = new FileTarget(location),
+                Confidence = Confidence.Safe,
             });
         }
-        catch
+        catch (Exception ex)
         {
-            // ignore
+            LogStore.Warn($"Could not check the install folder: {ex.Message}");
         }
     }
 
@@ -514,38 +643,59 @@ private bool TryReserve(string path, int cap, ref int counter)
         new(RegistryHive.LocalMachine, RegistryView.Registry32, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (32)"),
     ];
 
-    private void ScanRegistry(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
+private void ScanRegistry(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
     {
         var roots = RegistryRoots(Math.Max(2, _options.RegistryDepth));
 
-        for (int i = 0; i < roots.Count; i++)
+        // The roots are disjoint subtrees of different hives/views, so they can be walked
+        // concurrently. This is the dominant cost of a residue scan.
+        var parallelOptions = new ParallelOptions
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount / 2, 1, 4),
+        };
 
-            var root = roots[i];
-            progress?.Report(new ScanProgress("Registry", $"Scanning {root.Label}", _results.Count, 100));
-
-            try
+        try
+        {
+            Parallel.ForEach(roots, parallelOptions, root =>
             {
-                using var hiveKey = RegistryKey.OpenBaseKey(root.Hive, root.View);
-                using var baseKey = hiveKey.OpenSubKey(root.Path, writable: false);
-                if (baseKey is null)
+                progress?.Report(new ScanProgress("Registry", $"Scanning {root.Label}", _results.Count, 60));
+
+                try
                 {
-                    continue;
+                    using var hiveKey = RegistryKey.OpenBaseKey(root.Hive, root.View);
+                    using var baseKey = hiveKey.OpenSubKey(root.Path, writable: false);
+                    if (baseKey is null)
+                    {
+                        return;
+                    }
+
+                    WalkRegistry(baseKey, root, 0, cancellationToken);
                 }
-
-                WalkRegistry(baseKey, root, 0, cancellationToken);
-            }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
-            {
-                LogStore.Warn($"Registry scan skipped {root.Label}: not permitted.");
-            }
-
-            if (_capped)
-            {
-                break;
-            }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+                {
+                    LogStore.Warn($"Registry scan skipped {root.Label}: not permitted.");
+                    lock (_sync)
+                    {
+                        _warnings.Add($"{root.Label} could not be read; it was not scanned.");
+                    }
+                }
+            });
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (AggregateException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        progress?.Report(new ScanProgress("Registry", "Registry scan complete", _results.Count, 80));
     }
 
     private void WalkRegistry(RegistryKey parent, RegRoot root, int depth, CancellationToken cancellationToken)
@@ -567,11 +717,11 @@ private bool TryReserve(string path, int cap, ref int counter)
             return;
         }
 
-        foreach (string name in names)
+foreach (string name in names)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (_capped)
+            if (_capped || _registryBudgetExhausted())
             {
                 return;
             }
@@ -585,26 +735,31 @@ private bool TryReserve(string path, int cap, ref int counter)
 
             string? match = _tokens.Match(name) ?? (root.AllowWeak && _options.UsePublisherTokens ? _tokens.MatchWeak(name) : null);
 
+            if (match is not null)
+            {
+                // Report by name without opening the key: matched subtrees are pruned, so
+                // opening it could not reveal anything further.
+                AddRegistryKey(root, childPath, name, match);
+                continue;
+            }
+
+            // A parent's name says nothing about its children ("Microsoft" can contain
+            // "Discord"), so there is no sound name-based prefilter here. The wins are
+            // instead the parallel walk across independent roots, the excluded segments
+            // and the time/key budgets below.
+            Interlocked.Increment(ref _registryKeysVisited);
+
             RegistryKey? child = null;
-            bool opened = false;
             try
             {
                 child = parent.OpenSubKey(name, writable: false);
-                opened = child is not null;
             }
             catch
             {
-                // Unreadable key - can still report it as a match by name alone.
+                // Unreadable key - nothing more to report.
             }
 
-            if (match is not null)
-            {
-                AddRegistryKey(root, childPath, name, match, child);
-                child?.Dispose();
-                continue; // prune
-            }
-
-if (opened && child is not null)
+            if (child is not null)
             {
                 // Children of HKCU\Software\Classes are the file-type registrations; their
                 // identity usually lives in the default value, not the key name.
@@ -613,38 +768,74 @@ if (opened && child is not null)
                 if (root.Hive == RegistryHive.CurrentUser &&
                     parent.Name.EndsWith(@"\Classes", StringComparison.OrdinalIgnoreCase))
                 {
-                    CheckAssociationValues(child, childPath);
+                    CheckAssociationValues(child, childPath, root);
                 }
 
                 WalkRegistry(child, root, depth + 1, cancellationToken);
+                child.Dispose();
             }
-
-            child?.Dispose();
         }
     }
 
-    private void AddRegistryKey(RegRoot root, string keyPath, string name, string match, RegistryKey? key)
+    private bool _registryBudgetWarned;
+
+    /// <summary>
+    /// Bounds the registry walk. Without this a broad token walks tens of thousands of keys
+    /// with no clock attached, and the scan appears to hang.
+    /// </summary>
+    private bool _registryBudgetExhausted()
     {
-        if (!TryReserve(keyPath, _options.MaxRegistryMatches, ref _registryMatchCount))
+        if (Volatile.Read(ref _registryKeysVisited) < MaxRegistryKeysVisited && DateTime.UtcNow < _registryDeadline)
         {
-            return;
+            return false;
         }
 
-        _results.Add(new ResidueItem
+        if (!_registryBudgetWarned)
         {
-            Kind = ResidueKind.RegistryKey,
-            Path = keyPath,
-            DisplayName = name,
-            MatchedToken = match,
-            Reg = new RegLocation(root.Hive, root.View, keyPath),
-        });
+            _registryBudgetWarned = true;
+            bool timedOut = DateTime.UtcNow >= _registryDeadline;
+            LogStore.Warn(timedOut
+                ? "Registry scan stopped on its time budget; registry results are partial."
+                : $"Registry scan stopped after {MaxRegistryKeysVisited} keys; registry results are partial.");
+            _warnings.Add(timedOut
+                ? "The registry scan hit its time limit, so some registry leftovers may be missing."
+                : "The registry scan hit its key budget, so some registry leftovers may be missing.");
+        }
+
+        return true;
+    }
+
+private void AddRegistryKey(RegRoot root, string keyPath, string name, string match)
+    {
+        lock (_sync)
+        {
+            if (_registryMatchCount >= _options.MaxRegistryMatches)
+            {
+                _capped = true;
+                LogStore.Warn($"Match limit of {_options.MaxRegistryMatches} reached; results are partial.");
+                return;
+            }
+
+            _registryMatchCount++;
+
+            _results.Add(new ResidueItem
+            {
+                Kind = ResidueKind.RegistryKey,
+                Path = keyPath,
+                DisplayName = name,
+                MatchedToken = match,
+                Reg = new RegLocation(root.Hive, root.View, keyPath),
+                Target = new RegistryKeyTarget(new RegLocation(root.Hive, root.View, keyPath)),
+                Confidence = Confidence.Safe,
+            });
+        }
     }
 
     /// <summary>
     /// File-type associations show up as the default value of a key rather than the key name,
     /// e.g. HKCU\Software\Classes\MyApp.pdf with a friendly description as the default value.
     /// </summary>
-    private void CheckAssociationValues(RegistryKey key, string keyPath)
+    private void CheckAssociationValues(RegistryKey key, string keyPath, RegRoot root)
     {
         string[] valueNames;
         try
@@ -656,14 +847,18 @@ if (opened && child is not null)
             return;
         }
 
-        foreach (string valueName in valueNames)
+foreach (string valueName in valueNames)
         {
             string? match = null;
             try
             {
                 if (key.GetValue(valueName) is string text && text.Length is > 0 and < 300)
                 {
-                    match = _tokens.Match(text) ?? _tokens.Match(keyPath) ?? _tokens.MatchWeak(text);
+                    // Match the value's own text only. Matching the full registry path would
+                    // let any token that happens to appear in "HKEY_CURRENT_USER\Software\
+                    // Classes" match every association key in the hive.
+                    match = _tokens.Match(text)
+                        ?? (root.AllowWeak && _options.UsePublisherTokens ? _tokens.MatchWeak(text) : null);
                 }
             }
             catch
@@ -671,26 +866,35 @@ if (opened && child is not null)
                 // continue
             }
 
-            if (match is null || _capped)
+            if (match is null)
             {
                 continue;
             }
 
             string fullPath = keyPath + "\\" + valueName;
-            if (!TryReserve(fullPath, _options.MaxRegistryMatches, ref _registryMatchCount))
-            {
-                continue;
-            }
 
-            _results.Add(new ResidueItem
+            lock (_sync)
             {
-                Kind = ResidueKind.RegistryValue,
-                Path = fullPath,
-                DisplayName = string.IsNullOrEmpty(valueName) ? "(Default)" : valueName,
-                MatchedToken = match,
-                Reg = new RegLocation(RegistryHive.CurrentUser, RegistryView.Registry64, keyPath),
-                ValueName = valueName,
-            });
+                if (_registryMatchCount >= _options.MaxRegistryMatches)
+                {
+                    _capped = true;
+                    return;
+                }
+
+                _registryMatchCount++;
+
+                _results.Add(new ResidueItem
+                {
+                    Kind = ResidueKind.RegistryValue,
+                    Path = fullPath,
+                    DisplayName = string.IsNullOrEmpty(valueName) ? "(Default)" : valueName,
+                    MatchedToken = match,
+                    Reg = new RegLocation(root.Hive, root.View, keyPath),
+                    ValueName = valueName,
+                    Target = new RegistryValueTarget(new RegLocation(root.Hive, root.View, keyPath), valueName),
+                    Confidence = Confidence.Moderate,
+                });
+            }
         }
     }
 }

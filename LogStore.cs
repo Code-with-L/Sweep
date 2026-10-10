@@ -86,19 +86,30 @@ public static class LogStore
             lock (FileGate)
             {
                 Directory.CreateDirectory(LogDirectory);
-                var sb = new StringBuilder()
-                    .Append(entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff"))
-                    .Append(" [").Append(entry.LevelDisplay.PadRight(5)).Append("] ")
-                    .AppendLine(entry.Message);
 
-                File.AppendAllText(LogFilePath, sb.ToString(), Encoding.UTF8);
+                if (_writer is null)
+                {
+                    _writer = new StreamWriter(
+                        new FileStream(LogFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
+                        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+                    {
+                        AutoFlush = true,
+                    };
+                }
+
+                _writer.WriteLine(
+                    $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.LevelDisplay.PadRight(5)}] {entry.Message}");
             }
         }
         catch
         {
-            // Logging must never be fatal.
+            // Logging must never be fatal, but the writer may now be unusable.
+            _writer?.Dispose();
+            _writer = null;
         }
     }
+
+    private static StreamWriter? _writer;
 
     /// <summary>Writes a plain-text export of the current session for support/reporting.</summary>
     public static void ExportSession(string destination)

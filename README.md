@@ -16,12 +16,34 @@ cloud database, no telemetry.
   NSIS, InstallShield, Windows Installer, Squirrel, InstallAware) and applying the
   documented silent switches where they are known. Uses the vendor's `QuietUninstallString`
   when present.
-- **Scans for leftovers** — files, folders and registry entries — that still reference the
-  program, and shows them in a review list with checkboxes. Nothing is removed until you
-  confirm.
-- **Quarantines instead of deleting** by default, so a wrong match can be undone.
-- **Creates a restore point** before each removal when System Protection is enabled.
+- **Always offers a leftover scan afterwards**, whatever exit code the uninstaller
+  returned, and surfaces the uninstaller's own output. The program stays reachable for
+  scanning after it disappears from the list.
+- **Scans for leftovers** across files, folders, the registry, and the system artefacts
+  that a name-based sweep cannot reach:
+
+  | Category | Source |
+  |---|---|
+  | Startup entries | `HKCU`/`HKLM` `…\CurrentVersion\Run`, `RunOnce`, Startup folder |
+  | Services | `HKLM\SYSTEM\CurrentControlSet\Services\*` `ImagePath`, with orphan detection |
+  | Scheduled tasks | Task Scheduler inventory via `schtasks`, skipping `\Microsoft\Windows\*` |
+  | Shortcuts | Start Menu and Desktop `.lnk` files |
+  | Environment variables | `HKCU\Environment`, session manager `Environment` (by variable name only) |
+  | Fonts | `…\CurrentVersion\Fonts` in both hives |
+  | File associations | `HKCU\Software\Classes` default values |
+  | Registry keys | `HKCU\Software`, `HKLM\SOFTWARE` in both WOW64 views |
+
+- **Rates every match** as Safe, Moderate or Risky. Risky items start unchecked.
+- **Quarantines instead of deleting** by default, so a wrong match can be undone, and
+  reports loudly if the undo manifest cannot be written.
+- **Creates a restore point** before each removal when System Protection is enabled, and
+  tells you when it could not.
 - Handles locked files by deferring deletion to the next restart, and long paths.
+- **Shows every program icon**, extracting them off the UI thread. Programs that genuinely
+  have no icon get a generated letter badge rather than a blank cell or an anonymous
+  document glyph.
+
+![Leftovers](docs/screenshot-leftovers.png)
 
 ## Architecture support
 
@@ -90,15 +112,23 @@ Measures taken:
 - Windows- and sandbox-owned directories (`LocalAppData\Packages`, `ProgramData\Microsoft`,
   `C:\Windows`, `Package Cache`, …) are excluded outright.
 - Registry walks skip `CLSID`, `TypeLib`, `Interface`, `AppID` and `Wow6432Node`.
-- Scans are bounded by time and match caps and say so when results are partial.
+- Scans are bounded by time and match caps **per phase** (files and registry have
+  independent budgets), and a truncated or partly-failed scan says so in the UI rather
+  than being presented as a complete result.
+- The registry phase always runs, even if the file phase hit its cap. An earlier version
+  silently skipped it, which meant a broad match hid every registry leftover.
 
 ## Limitations
 
 - There is no per-vendor removal recipe database. Detection is generic and name-based, so
-  it finds the common cases (install folders, AppData trees, registry keys, file-type
-  associations) but cannot know an application's bespoke quirks.
-- Registry matching is name-based, so a third-party key that happens to contain the product
-  name can be reported. This is why results are reviewed rather than deleted blindly.
+  it finds the common cases but cannot know an application's bespoke quirks.
+- Registry matching is name-based, so a third-party key that happens to contain the
+  product name can be reported. This is why results are reviewed rather than deleted
+  blindly, and why everything is rated by confidence.
+- Browser extensions and MSI component/orphan analysis are not scanned. Both require
+  profile- and installer-state-aware parsing that can do real damage if it is wrong.
+- `PATH` contents are never edited automatically; only environment variable *names* are
+  matched.
 - Uninstallers that always show a UI regardless of switches will not become silent.
 - Quarantined items are moved, so restoring does not restore timestamps or ACLs exactly.
 

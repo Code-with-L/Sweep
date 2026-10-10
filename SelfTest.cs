@@ -129,11 +129,22 @@ internal static class SelfTest
             Console.WriteLine();
             Console.WriteLine($"matches    : {items.Count}");
             Console.WriteLine($"elapsed    : {sw.ElapsedMilliseconds} ms");
-            Console.WriteLine($"folders    : {items.Count(i => i.Kind == ResidueKind.Folder)}");
-            Console.WriteLine($"files      : {items.Count(i => i.Kind == ResidueKind.File)}");
-            Console.WriteLine($"reg keys   : {items.Count(i => i.Kind == ResidueKind.RegistryKey)}");
-            Console.WriteLine($"reg values : {items.Count(i => i.Kind == ResidueKind.RegistryValue)}");
             Console.WriteLine($"total size : {SizeCalculator.Format(items.Sum(i => i.SizeBytes))}");
+
+            foreach (var group in items.GroupBy(i => i.Kind).OrderByDescending(g => g.Count()))
+            {
+                Console.WriteLine($"  {group.Key,-20} {group.Count()}");
+            }
+
+            if (scanner.Warnings.Count > 0)
+            {
+                Console.WriteLine("warnings:");
+                foreach (string warning in scanner.Warnings)
+                {
+                    Console.WriteLine($"  ! {warning}");
+                }
+            }
+
             Console.WriteLine();
 
             foreach (var item in items.Take(25))
@@ -209,7 +220,11 @@ internal static class SelfTest
             }
 
             bool exists = File.Exists(plan.FileName) ||
-                          (plan.FileName.Contains('\\') ? false : false);
+                          (!string.IsNullOrWhiteSpace(plan.FileName) &&
+                           !Path.IsPathRooted(plan.FileName) &&
+                           CommandLine.ResolveExecutable(plan.FileName) == plan.FileName
+                               ? File.Exists(plan.FileName)
+                               : true);
             if (!exists)
             {
                 missingExe++;

@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Sweep;
 
 internal sealed class MainForm : Form
@@ -20,6 +22,7 @@ internal sealed class MainForm : Form
     private ActivityForm? _activity;
     private ToolStripMenuItem _themeDarkItem = null!;
     private ToolStripMenuItem _themeLightItem = null!;
+    private ToolStripMenuItem _lastUninstalledItem = null!;
     private bool _busy;
 
     /// <summary>Diagnostic hook: opens the leftovers pane for a named program at startup.</summary>
@@ -34,12 +37,15 @@ internal sealed class MainForm : Form
         Text = "Sweep - App Uninstaller";
         StartPosition = FormStartPosition.CenterScreen;
 
-        // Fit the working area instead of assuming a large monitor.
+        // Fit the working area instead of assuming a large monitor. MinimumSize is assigned
+        // first: it was previously read while still (0,0), so WinForms silently overrode
+        // the computed size on small displays.
+        MinimumSize = new Size(820, 480);
+
         Rectangle work = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1180, 700);
         ClientSize = new Size(
             Math.Max(MinimumSize.Width, Math.Min(1180, work.Width - 40)),
             Math.Max(MinimumSize.Height, Math.Min(700, work.Height - 40)));
-        MinimumSize = new Size(820, 480);
         AutoScaleMode = AutoScaleMode.Dpi;
         KeyPreview = true;
 
@@ -141,10 +147,16 @@ internal sealed class MainForm : Form
             ShortcutKeys = Keys.Delete,
             Name = "uninstall",
         });
-        removal.DropDownItems.Add(new ToolStripMenuItem("Scan &leftovers...", null, async (_, _) => ScanSelected())
+        removal.DropDownItems.Add(new ToolStripMenuItem("Scan &leftovers...", null, (_, _) => ScanSelected())
         {
             Name = "scan",
         });
+        _lastUninstalledItem = new ToolStripMenuItem("Scan leftovers for &last removed program...", null, (_, _) => ScanLastUninstalled())
+        {
+            Name = "scanLast",
+            Enabled = false,
+        };
+        removal.DropDownItems.Add(_lastUninstalledItem);
 
         var view = new ToolStripMenuItem("&View");
         _themeDarkItem = new ToolStripMenuItem("&Dark theme", null, (_, _) => SetTheme(ThemeMode.Dark));
@@ -327,7 +339,7 @@ private Control BuildToolbar()
 
         e.Value = column switch
         {
-            "icon" => IconCache.Get(app),
+            "icon" => IconProvider.Get(app),
             "name" => app.DisplayName,
             "version" => string.IsNullOrEmpty(app.DisplayVersion) ? "-" : app.DisplayVersion,
             "publisher" => string.IsNullOrEmpty(app.Publisher) ? "-" : app.Publisher,
@@ -385,6 +397,7 @@ private Control BuildToolbar()
         {
             var apps = await Task.Run(() => RegistryScanner.Scan());
             _all = apps;
+            IconProvider.Clear();
             ApplyFilter();
 
             string elevated = Program.IsElevated ? "elevated" : "not elevated";
@@ -447,6 +460,50 @@ private Control BuildToolbar()
         }
 
         UpdateSelection();
+        PrefetchIcons();
+    }
+
+    private CancellationTokenSource? _iconCts;
+
+    /// <summary>
+    /// Icons are extracted off the UI thread. CellValueNeeded then only ever performs a
+    /// dictionary lookup, so scrolling and repainting never touch the filesystem.
+    /// </summary>
+    private void PrefetchIcons()
+    {
+        _iconCts?.Cancel();
+        _iconCts?.Dispose();
+        _iconCts = new CancellationTokenSource();
+        var token = _iconCts.Token;
+
+        var snapshot = _filtered.Take(400).ToList();
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                IconProvider.Prefetch(snapshot, token);
+            }
+            catch (Exception ex)
+            {
+                LogStore.Warn($"Icon prefetch stopped: {ex.Message}");
+                return;
+            }
+
+            if (token.IsCancellationRequested || IsDisposed)
+            {
+                return;
+            }
+
+            try
+            {
+                BeginInvoke((Action)(() => _grid.Invalidate()));
+            }
+            catch (ObjectDisposedException)
+            {
+                // Window closed mid-prefetch.
+            }
+        }, token);
     }
 
     private static bool Contains(string? value, string query) =>
@@ -514,7 +571,13 @@ private Control BuildToolbar()
 
         if (dialog.CreateRestorePoint)
         {
-            SystemRestore.TryCreate(app.DisplayName, out _);
+            // The outcome used to be discarded, so a failed restore point left the user
+            // believing they had an undo.
+            SystemRestore.TryCreate(app.DisplayName, out string restoreMessage);
+            if (!restoreMessage.StartsWith("Restore point created", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this, restoreMessage, "Sweep", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         LogStore.Info($"Uninstalling \"{app.DisplayName}\" using {UninstallRunner.Describe(plan.Family)}.");
@@ -530,6 +593,9 @@ private Control BuildToolbar()
         catch (OperationCanceledException)
         {
             SetStatus("Wait cancelled - the uninstaller may still be running.");
+
+            // The uninstaller may well have continued without us.
+            RememberLastUninstalled(app);
             return;
         }
         finally
@@ -542,14 +608,17 @@ private Control BuildToolbar()
         if (!outcome.Launched)
         {
             LogStore.Error($"\"{app.DisplayName}\" uninstaller did not start: {outcome.FailureReason}");
+            RememberLastUninstalled(app);
             MessageBox.Show(this,
                 $"The uninstaller could not be started.\r\n\r\n{outcome.FailureReason}\r\n\r\n" +
-                $"Command: {plan.FileName} {plan.Arguments}",
+                $"Command: {plan.FileName} {plan.Arguments}\r\n\r\n" +
+                "You can still scan for leftover files and registry entries.",
                 "Sweep", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
         LogStore.Info($"\"{app.DisplayName}\" uninstaller exited with code {outcome.ExitCode}.");
+        RememberLastUninstalled(app);
 
         if (outcome.ExitCode == 0)
         {
@@ -559,10 +628,23 @@ private Control BuildToolbar()
         SetStatus($"\"{app.DisplayName}\" finished (exit code {outcome.ExitCode}).");
         await LoadAppsAsync();
 
-        if (dialog.RunSilent)
-        {
-            PromptForLeftovers(app);
-        }
+        // Always offer the leftover scan. It used to be gated on the "silent" checkbox,
+        // which meant a user who unticked it to watch the uninstaller could never scan
+        // for what was left behind.
+        PromptForLeftovers(app, outcome);
+    }
+
+    private InstalledApp? _lastUninstalled;
+
+    /// <summary>
+    /// Keeps the just-removed program reachable after it disappears from the list, so its
+    /// leftovers can still be scanned without hunting for it again.
+    /// </summary>
+    private void RememberLastUninstalled(InstalledApp app)
+    {
+        _lastUninstalled = app;
+        _lastUninstalledItem.Enabled = true;
+        UpdateSelection();
     }
 
     private async Task WaitForRemovalAsync(InstalledApp app)
@@ -586,11 +668,39 @@ private Control BuildToolbar()
         }
     }
 
-    private void PromptForLeftovers(InstalledApp app)
+    private void PromptForLeftovers(InstalledApp app, UninstallOutcome outcome)
     {
-        var answer = MessageBox.Show(this,
-            $"Uninstall of \"{app.DisplayName}\" finished.\r\n\r\nSearch for leftover files and registry entries now?",
-            "Sweep", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        var text = new StringBuilder();
+        text.AppendLine($"Uninstaller for \"{app.DisplayName}\" exited with code {outcome.ExitCode}.");
+
+        if (outcome.ExitCode != 0)
+        {
+            text.AppendLine();
+            text.AppendLine("A non-zero exit code usually means the uninstall did not complete cleanly.");
+            text.AppendLine("Leftovers are therefore more likely than usual.");
+        }
+
+        string detail = (outcome.StandardError ?? string.Empty).Trim();
+        if (detail.Length == 0)
+        {
+            detail = (outcome.StandardOutput ?? string.Empty).Trim();
+        }
+
+        if (detail.Length > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("Uninstaller output:");
+            foreach (string line in detail.Split('\n').Take(10))
+            {
+                text.AppendLine("  " + line.TrimEnd());
+            }
+        }
+
+        text.AppendLine();
+        text.AppendLine("Search for leftover files and registry entries now?");
+
+        var answer = MessageBox.Show(this, text.ToString(), "Sweep", MessageBoxButtons.YesNo,
+            outcome.ExitCode == 0 ? MessageBoxIcon.Question : MessageBoxIcon.Warning);
 
         if (answer == DialogResult.Yes)
         {
@@ -605,6 +715,17 @@ private Control BuildToolbar()
         {
             OpenResidueForm(app);
         }
+    }
+
+    /// <summary>Reopens the leftover scan for the program removed most recently.</summary>
+    private void ScanLastUninstalled()
+    {
+        if (_lastUninstalled is null || _busy)
+        {
+            return;
+        }
+
+        OpenResidueForm(_lastUninstalled);
     }
 
     private void OpenResidueForm(InstalledApp app)
@@ -763,10 +884,23 @@ private Control BuildToolbar()
 
         try
         {
-            int restored = Quarantine.RestoreFrom(Path.GetDirectoryName(dialog.FileName)!);
-            LogStore.Success($"Restored {restored} quarantined item(s).");
-            MessageBox.Show(this, $"Restored {restored} item(s).", "Sweep",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            string? folder = Path.GetDirectoryName(dialog.FileName);
+            if (string.IsNullOrEmpty(folder))
+            {
+                MessageBox.Show(this, "Select the manifest.json inside a quarantine folder.", "Sweep",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            int restored = Quarantine.RestoreFrom(folder);
+            int total = Quarantine.CountEntries(folder);
+            LogStore.Success($"Restored {restored} of {total} quarantined item(s).");
+            MessageBox.Show(this,
+                restored == total
+                    ? $"Restored {restored} item(s)."
+                    : $"Restored {restored} of {total} item(s). The rest could not be moved back; see the Activity log.",
+                "Sweep", MessageBoxButtons.OK,
+                restored == total ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
         catch (Exception ex)
         {

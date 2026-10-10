@@ -40,7 +40,12 @@ internal sealed class ActivityForm : Form
         Theme.StyleButton(export, p);
         Theme.StyleButton(clear, p);
 
-        clear.Click += (_, _) => Reload();
+        clear.Click += (_, _) =>
+        {
+            // Actually clear the in-memory view. This previously just reloaded it.
+            LogStore.ClearRecent();
+            Reload();
+        };
 
         export.Click += (_, _) =>
         {

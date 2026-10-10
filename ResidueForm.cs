@@ -12,6 +12,15 @@ internal sealed class ResidueForm : Form
     private readonly Button _selectAllButton = new();
     private readonly Button _selectNoneButton = new();
     private readonly Button _invertButton = new();
+    private readonly Label _warningsLabel = new()
+    {
+        Visible = false,
+        AutoSize = false,
+        Dock = DockStyle.Bottom,
+        Height = 0,
+        Padding = new Padding(14, 4, 14, 4),
+        TextAlign = ContentAlignment.MiddleLeft,
+    };
 
     private CancellationTokenSource? _cts;
 
@@ -35,7 +44,7 @@ internal sealed class ResidueForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             Margin = Padding.Empty,
             Padding = Padding.Empty,
         };
@@ -43,13 +52,15 @@ internal sealed class ResidueForm : Form
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         root.Controls.Add(header, 0, 0);
         root.Controls.Add(_list, 0, 1);
-        root.Controls.Add(bottom, 0, 2);
-        root.Controls.Add(strip, 0, 3);
+        root.Controls.Add(_warningsLabel, 0, 2);
+        root.Controls.Add(bottom, 0, 3);
+        root.Controls.Add(strip, 0, 4);
 
         Controls.Add(root);
 
@@ -109,19 +120,21 @@ internal sealed class ResidueForm : Form
         _list.HideSelection = false;
         _list.MultiSelect = true;
         _list.Columns.Add("Type", 110);
-        _list.Columns.Add("Name", 220);
-        _list.Columns.Add("Size", 90);
-        _list.Columns.Add("Matched on", 110);
-        _list.Columns.Add("Path", 520);
+        _list.Columns.Add("Name", 190);
+        _list.Columns.Add("Size", 84);
+        _list.Columns.Add("Confidence", 96);
+        _list.Columns.Add("Matched on", 100);
+        _list.Columns.Add("Path", 440);
 
         _list.ColumnClick += (_, e) =>
         {
-            if (e.Column < 1 || _list.Items.Count == 0)
+            if (_list.Items.Count == 0)
             {
                 return;
             }
 
-            // Clicking the checkbox column header selects everything, matching Explorer.
+            // Clicking the checkbox column header selects or clears everything, matching
+            // Explorer's "select all" affordance.
             if (e.Column == 0)
             {
                 bool target = _list.Items.Cast<ListViewItem>().Any(i => !i.Checked);
@@ -133,8 +146,19 @@ internal sealed class ResidueForm : Form
 
                 _list.EndUpdate();
             }
+            else
+            {
+                // Clicking any other header sorts by that column, toggling direction.
+                _list.Sorting = _lastSortColumn == e.Column && _list.Sorting == SortOrder.Ascending
+                    ? SortOrder.Descending
+                    : SortOrder.Ascending;
+                _lastSortColumn = e.Column;
+                _list.Sort();
+            }
         };
     }
+
+    private int _lastSortColumn = -1;
 
     private Panel BuildBottomBar()
     {
@@ -227,9 +251,9 @@ internal sealed class ResidueForm : Form
         });
 
         List<ResidueItem>? items = null;
+        var scanner = new ResidueScanner(_app, _options);
         try
         {
-            var scanner = new ResidueScanner(_app, _options);
             items = await scanner.ScanAsync(progress, _cts.Token);
         }
         catch (OperationCanceledException)
@@ -275,6 +299,16 @@ internal sealed class ResidueForm : Form
             _removeButton.Enabled = true;
         }
 
+        // A truncated or partly-failed scan must not be presented as a complete result.
+        if (scanner.Warnings.Count > 0)
+        {
+            _status.Text += "  (partial - see note)";
+            _warningsLabel.Visible = true;
+            _warningsLabel.Text = "Note: " + string.Join("  ", scanner.Warnings);
+            _warningsLabel.Height = 34;
+            _warningsLabel.ForeColor = Theme.Current.Warning;
+        }
+
         LogStore.Info($"Residue scan for \"{_app.DisplayName}\" finished with {items.Count} item(s).");
     }
 
@@ -285,16 +319,31 @@ private void Populate(List<ResidueItem> items)
         _list.BeginUpdate();
         _list.Items.Clear();
 
-        foreach (var item in items.OrderByDescending(i => i.Kind == ResidueKind.RegistryKey || i.Kind == ResidueKind.RegistryValue)
+        foreach (var item in items.OrderBy(i => i.Confidence)
+                                .ThenByDescending(i => i.Kind == ResidueKind.RegistryKey || i.Kind == ResidueKind.RegistryValue)
                                 .ThenBy(i => i.Path, StringComparer.OrdinalIgnoreCase))
         {
-            var view = new ListViewItem(item.Kind.ToString()) { Tag = item, Checked = item.SelectedByDefault };
+            var view = new ListViewItem(item.Kind.ToString())
+            {
+                Tag = item,
+                Checked = item.SelectedByDefault,
+            };
+
+            if (item.Confidence == Confidence.Risky)
+            {
+                view.ForeColor = p.Warning;
+            }
+            else if (item.Target is null)
+            {
+                view.ForeColor = p.TextDim;
+            }
+
             view.SubItems.Add(item.DisplayName);
             view.SubItems.Add(item.SizeDisplay);
+            view.SubItems.Add(item.Confidence.ToString());
             view.SubItems.Add(item.MatchedToken);
             view.SubItems.Add(item.Path);
-            view.ForeColor = p.Text;
-            view.ToolTipText = item.Path;
+            view.ToolTipText = string.IsNullOrEmpty(item.Note) ? item.Path : $"{item.Path} - {item.Note}";
             _list.Items.Add(view);
         }
 
@@ -362,85 +411,115 @@ private void Populate(List<ResidueItem> items)
         var quarantine = useQuarantine ? new Quarantine(_app.DisplayName) : null;
         var failures = new List<string>();
         var pendingReboot = new List<string>();
-        int done = 0;
+        var succeeded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processed = 0;
+        bool manifestOk = true;
+        bool cancelled = false;
 
-        await Task.Run(() =>
+        try
         {
-            foreach (var (_, residue) in selected)
+            await Task.Run(() =>
             {
-                if (token.IsCancellationRequested)
+                foreach (var (_, residue) in selected)
                 {
-                    break;
-                }
+                    if (token.IsCancellationRequested)
+                    {
+                        cancelled = true;
+                        break;
+                    }
 
-                DeletionResult result = residue.Kind switch
-                {
-                    ResidueKind.Folder => quarantine is not null
-                        ? quarantine.QuarantineDirectory(residue.Path)
-                        : FileOps.DeleteDirectory(residue.Path),
-                    ResidueKind.File => quarantine is not null
-                        ? quarantine.QuarantineFile(residue.Path)
-                        : FileOps.DeleteFile(residue.Path),
-                    ResidueKind.RegistryKey => RegistryResidueOps.DeleteKey(residue.Reg),
-                    ResidueKind.RegistryValue => RegistryResidueOps.DeleteValue(residue.Reg, residue.ValueName ?? string.Empty),
-                    _ => new DeletionResult(true, residue.Path, false, null),
-                };
+                    DeletionResult result = residue.Target is null
+                        ? new DeletionResult(false, residue.Path, false, "No removal method available.")
+                        : Removal.Execute(residue, quarantine);
 
-                if (result.ScheduledForReboot)
-                {
-                    pendingReboot.Add(result.Path);
-                }
-                else if (!result.Success)
-                {
-                    failures.Add($"{residue.Path}: {result.Error}");
-                }
+                    if (result.ScheduledForReboot)
+                    {
+                        pendingReboot.Add(result.Path);
+                    }
+                    else if (result.Success)
+                    {
+                        succeeded.Add(residue.Path);
+                    }
+                    else
+                    {
+                        failures.Add($"{residue.Path}: {result.Error}");
+                    }
 
-                done++;
-                BeginInvoke(() =>
-                {
-                    _progress.Value = Math.Min(done, _progress.Maximum);
-                    _status.Text = $"Removing {done} of {selected.Count}...";
-                });
+                    int snapshot = ++processed;
+
+                    // Throttle: one marshalled delegate per item is a needless UI cost for
+                    // lists that can run to thousands.
+                    if (snapshot % 25 == 0 || snapshot == selected.Count)
+                    {
+                        BeginInvoke(() =>
+                        {
+                            _progress.Value = Math.Min(snapshot, _progress.Maximum);
+                            _status.Text = $"Removing {snapshot} of {selected.Count}...";
+                        });
+                    }
+                }
+            });
+        }
+        finally
+        {
+            // Without this, a failure anywhere below leaves the Stop button stuck, the
+            // Remove button dead and the cancellation token leaked.
+            _cts.Dispose();
+            _cts = null;
+            _cancelScanButton.Text = "Stop scanning";
+            _cancelScanButton.Visible = false;
+            _progress.Visible = false;
+            _progress.Style = ProgressBarStyle.Continuous;
+            UseWaitCursor = false;
+        }
+
+        if (quarantine is not null && quarantine.Count > 0)
+        {
+            manifestOk = quarantine.SaveManifest(out string manifestError);
+            if (!manifestOk)
+            {
+                LogStore.Error($"Quarantine manifest could not be written: {manifestError}");
             }
-        });
-
-        quarantine?.SaveManifest();
-
-        _cts.Dispose();
-        _cts = null;
-        _cancelScanButton.Text = "Stop scanning";
+        }
 
         if (_list.IsHandleCreated)
         {
             foreach (var (view, residue) in selected)
             {
-                bool removed = residue.Kind is ResidueKind.RegistryKey or ResidueKind.RegistryValue
-                    ? !failures.Any(f => f.StartsWith(residue.Path, StringComparison.OrdinalIgnoreCase))
-                    : !Directory.Exists(residue.Path) && !File.Exists(residue.Path);
-
-                if (removed)
+                if (succeeded.Contains(residue.Path))
                 {
                     _list.Items.Remove(view);
                 }
             }
         }
 
+        int removedCount = succeeded.Count;
+        int skippedCount = selected.Count - processed;
         _removeButton.Enabled = _list.Items.Count > 0;
-        _cancelScanButton.Visible = false;
-        _progress.Visible = false;
-        UseWaitCursor = false;
 
-        int removedCount = selected.Count - failures.Count - pendingReboot.Count;
         LogStore.Success($"Removed {removedCount} leftover item(s) for \"{_app.DisplayName}\".");
 
         var summary = new System.Text.StringBuilder();
-        summary.AppendLine($"Removed: {removedCount}");
+        summary.AppendLine($"Removed: {removedCount} of {selected.Count}");
+
+        if (cancelled && skippedCount > 0)
+        {
+            summary.AppendLine();
+            summary.AppendLine($"{skippedCount} item(s) were not processed because you stopped the removal.");
+        }
+
+        if (!manifestOk)
+        {
+            summary.AppendLine();
+            summary.AppendLine("WARNING: the quarantine manifest could not be written, so these items " +
+                               "CANNOT be restored automatically. Move them back manually before rebooting.");
+        }
 
         if (pendingReboot.Count > 0)
         {
             summary.AppendLine();
             summary.AppendLine($"{pendingReboot.Count} item(s) are locked by another process and are queued for deletion on the next restart:");
-            foreach (var path in pendingReboot.Take(8))
+            foreach (string path in pendingReboot.Take(8))
             {
                 summary.AppendLine("  " + path);
             }
@@ -450,7 +529,7 @@ private void Populate(List<ResidueItem> items)
         {
             summary.AppendLine();
             summary.AppendLine($"{failures.Count} item(s) could not be removed:");
-            foreach (var failure in failures.Take(8))
+            foreach (string failure in failures.Take(8))
             {
                 summary.AppendLine("  " + failure);
             }
@@ -461,6 +540,6 @@ private void Populate(List<ResidueItem> items)
 
         _status.Text = $"Removed {removedCount} of {selected.Count} item(s).";
         MessageBox.Show(this, summary.ToString(), "Sweep", MessageBoxButtons.OK,
-            failures.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            failures.Count > 0 || !manifestOk ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
 }

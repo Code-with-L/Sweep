@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Microsoft.Win32;
 
 namespace Sweep;
@@ -257,59 +256,6 @@ public static class RegistryScanner
         catch
         {
             return false;
-        }
-    }
-}
-
-/// <summary>
-/// Lazily extracts and caches application icons. Icons are only pulled for rows that are
-/// actually visible, which keeps startup fast with several hundred programs installed.
-/// </summary>
-public static class IconCache
-{
-    private const int RequestedSize = 32;
-    private static readonly ConcurrentDictionary<string, Image?> Cache = new(StringComparer.OrdinalIgnoreCase);
-
-    public static Image? Get(InstalledApp app)
-    {
-        string key = app.ExecutablePath ?? app.DisplayName;
-        return Cache.GetOrAdd(key, _ => Load(app.ExecutablePath));
-    }
-
-    public static void Clear() => Cache.Clear();
-
-    private static Image? Load(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-        {
-            return null;
-        }
-
-        var large = new IntPtr[1];
-        try
-        {
-            uint count = Native.ExtractIconExW(path, 0, large, null, 1);
-            if (count == 0 || large[0] == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            try
-            {
-                using var handleIcon = Icon.FromHandle(large[0]);
-                // FromHandle does not own the handle, so clone before releasing it.
-                using var sized = new Icon(handleIcon, RequestedSize, RequestedSize);
-                using var bitmap = sized.ToBitmap();
-                return new Bitmap(bitmap);
-            }
-            finally
-            {
-                Native.DestroyIcon(large[0]);
-            }
-        }
-        catch
-        {
-            return null;
         }
     }
 }

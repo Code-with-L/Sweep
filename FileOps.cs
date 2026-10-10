@@ -196,22 +196,26 @@ public sealed class Quarantine
 
     public Quarantine(string appName)
     {
-        string root = Path.Combine(
+        string name = PathUtil.SafeFileName(appName) ?? "app";
+        string baseDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "Sweep",
-            "Quarantine",
-            $"{PathUtil.SafeFileName(appName)}_{DateTime.Now:yyyyMMdd_HHmmss}");
+            "Quarantine");
 
-        if (!CanWrite(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)))
+        if (!CanWrite(Path.GetDirectoryName(baseDir)!))
         {
-            root = Path.Combine(
+            baseDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Sweep",
-                "Quarantine",
-                $"{PathUtil.SafeFileName(appName)}_{DateTime.Now:yyyyMMdd_HHmmss}");
+                "Quarantine");
         }
 
-        Root = root;
+        baseDir = Path.Combine(baseDir, name);
+
+        // Two apps sharing a name prefix, quarantined in the same second, must not land in
+        // the same directory - the second SaveManifest would overwrite the first session's
+        // undo record.
+        Root = baseDir + $"_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}";
         Directory.CreateDirectory(Root);
     }
 
@@ -306,24 +310,55 @@ public sealed class Quarantine
                 if (isDirectory)
                 {
                     CopyDirectory(source, unique);
-                    FileOps.DeleteDirectory(source);
                 }
                 else
                 {
                     File.Copy(source, unique, overwrite: true);
-                    FileOps.DeleteFile(source);
                 }
-
-                return new DeletionResult(true, source, false, null);
             }
             catch (Exception ex)
             {
                 return new DeletionResult(false, source, false, ex.Message);
             }
+
+            // The copy succeeded, so the item must now be recorded even though the
+            // original still exists. Reporting success here without a manifest entry
+            // would leave an unrestorable duplicate behind.
+            DeletionResult removed = isDirectory
+                ? FileOps.DeleteDirectory(source)
+                : FileOps.DeleteFile(source);
+
+            if (!removed.Success && !removed.ScheduledForReboot)
+            {
+                TryDeleteCopy(unique, isDirectory);
+                return new DeletionResult(false, source, false,
+                    $"{removed.Error} (a copy was left at {unique})");
+            }
+
+            return new DeletionResult(removed.Success, source, removed.ScheduledForReboot, null);
         }
         catch (Exception ex)
         {
             return new DeletionResult(false, source, false, ex.Message);
+        }
+    }
+
+    private static void TryDeleteCopy(string copy, bool isDirectory)
+    {
+        try
+        {
+            if (isDirectory)
+            {
+                Directory.Delete(copy, recursive: true);
+            }
+            else
+            {
+                File.Delete(copy);
+            }
+        }
+        catch
+        {
+            // Best effort.
         }
     }
 
@@ -355,19 +390,26 @@ public sealed class Quarantine
         }
     }
 
-    public void SaveManifest()
+    public bool SaveManifest(out string error)
     {
         try
         {
             File.WriteAllText(
                 ManifestPath,
                 JsonSerializer.Serialize(_entries, new JsonSerializerOptions { WriteIndented = true }));
+            error = string.Empty;
+            return true;
         }
         catch (Exception ex)
         {
-            LogStore.Warn($"Could not write quarantine manifest: {ex.Message}");
+            // Reported to the user: without a manifest these items cannot be restored.
+            error = ex.Message;
+            LogStore.Error($"Could not write quarantine manifest: {ex.Message}");
+            return false;
         }
     }
+
+    public void SaveManifest() => SaveManifest(out _);
 
     public int Count => _entries.Count;
 
@@ -408,6 +450,24 @@ public sealed class Quarantine
         }
 
         return restored;
+    }
+
+    public static int CountEntries(string quarantineRoot)
+    {
+        try
+        {
+            string manifest = Path.Combine(quarantineRoot, "manifest.json");
+            if (!File.Exists(manifest))
+            {
+                return 0;
+            }
+
+            return JsonSerializer.Deserialize<List<Entry>>(File.ReadAllText(manifest))?.Count ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     public static IReadOnlyList<string> ListQuarantineRoots()
