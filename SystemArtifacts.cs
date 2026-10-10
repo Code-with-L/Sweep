@@ -48,8 +48,9 @@ public static class SystemArtifacts
         (RegistryHive.LocalMachine, RegistryView.Registry32, @"Software\Microsoft\Windows\CurrentVersion\RunOnce"),
     ];
 
-    public static IEnumerable<ResidueItem> StartupEntries(
-        ResidueTokenSet tokens, bool allowWeak, CancellationToken cancellationToken)
+    public sealed record StartupEntry(string Name, string Command, RegLocation Location, string Source);
+
+    public static IEnumerable<StartupEntry> AllStartupEntries(CancellationToken cancellationToken)
     {
         foreach (var (hive, view, path) in StartupKeys)
         {
@@ -57,67 +58,75 @@ public static class SystemArtifacts
 
             foreach (var (name, data) in ReadValues(hive, view, path))
             {
-                // Either the entry is named after the product, or the command points at it.
-                string? match = tokens.Match(name) ?? MatchSegmented(data, tokens, allowWeak);
-                if (match is null)
-                {
-                    continue;
-                }
-
-                yield return new ResidueItem
-                {
-                    Kind = ResidueKind.StartupEntry,
-                    Path = $@"{HiveName(hive)}\{path}\{name}",
-                    DisplayName = name,
-                    MatchedToken = match,
-                    Reg = new RegLocation(hive, view, path),
-                    ValueName = name,
-                    Target = new RegistryValueTarget(new RegLocation(hive, view, path), name),
-                    Confidence = Confidence.Moderate,
-                };
+                yield return new StartupEntry(name, data ?? string.Empty, new RegLocation(hive, view, path),
+                    $"{HiveName(hive)}\\{path}");
             }
         }
 
-        foreach (string folder in StartupFolders())
+        foreach (string shortcut in StartupFolderShortcuts(cancellationToken))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            foreach (string file in SafeEnumerateShortcuts(folder, cancellationToken))
-            {
-                string name = Path.GetFileNameWithoutExtension(file);
-                string? match = tokens.Match(name);
-                if (match is null)
-                {
-                    continue;
-                }
-
-                yield return new ResidueItem
-                {
-                    Kind = ResidueKind.Shortcut,
-                    Path = file,
-                    DisplayName = name,
-                    MatchedToken = match,
-                    Target = new FileTarget(file),
-                    Confidence = Confidence.Moderate,
-                };
-            }
+            yield return new StartupEntry(
+                Path.GetFileNameWithoutExtension(shortcut), shortcut,
+                default, "Startup folder");
         }
     }
 
-    private static IEnumerable<string> StartupFolders()
+    public static IEnumerable<ResidueItem> StartupEntries(
+        ResidueTokenSet tokens, bool allowWeak, CancellationToken cancellationToken)
+    {
+        foreach (var entry in AllStartupEntries(cancellationToken))
+        {
+            // Either the entry is named after the product, or the command points at it.
+            string? match = tokens.Match(entry.Name) ?? MatchSegmented(entry.Command, tokens, allowWeak);
+            if (match is null)
+            {
+                continue;
+            }
+
+            bool isShortcut = entry.Source == "Startup folder";
+
+            yield return new ResidueItem
+            {
+                Kind = isShortcut ? ResidueKind.Shortcut : ResidueKind.StartupEntry,
+                Path = $"{entry.Source}\\{entry.Name}",
+                DisplayName = entry.Name,
+                MatchedToken = match,
+                Reg = entry.Location,
+                ValueName = entry.Name,
+                Target = isShortcut
+                    ? new FileTarget(entry.Command)
+                    : new RegistryValueTarget(entry.Location, entry.Name),
+                Confidence = Confidence.Moderate,
+            };
+        }
+    }
+
+    private static IEnumerable<string> StartupFolderShortcuts(CancellationToken cancellationToken)
     {
         foreach (Environment.SpecialFolder folder in
                  new[] { Environment.SpecialFolder.Startup, Environment.SpecialFolder.CommonStartup })
         {
-            string path = Environment.GetFolderPath(folder);
+            string path;
+            try
+            {
+                path = Environment.GetFolderPath(folder);
+            }
+            catch
+            {
+                continue;
+            }
+
             if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
             {
-                yield return path;
+                foreach (string file in EnumerateShortcuts(path, cancellationToken))
+                {
+                    yield return file;
+                }
             }
         }
     }
 
-    private static IEnumerable<string> SafeEnumerateShortcuts(string root, CancellationToken cancellationToken)
+    private static IEnumerable<string> EnumerateShortcuts(string root, CancellationToken cancellationToken)
     {
         var pending = new Stack<string>();
         pending.Push(root);
@@ -146,8 +155,7 @@ public static class SystemArtifacts
             {
                 foreach (string child in Directory.GetDirectories(dir))
                 {
-                    var attrs = File.GetAttributes(child);
-                    if ((attrs & FileAttributes.ReparsePoint) == 0)
+                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
                     {
                         pending.Push(child);
                     }
@@ -162,40 +170,121 @@ public static class SystemArtifacts
 
     // ---- Services --------------------------------------------------------
 
-    public static IEnumerable<ResidueItem> Services(
-        ResidueTokenSet tokens, bool allowWeak, CancellationToken cancellationToken)
+    public sealed record ServiceEntry(string Name, string ImagePath, uint StartType);
+
+    private const uint ServiceDisabled = 1;
+    private const uint ServiceAutoStart = 2;
+    private const uint ServiceDemandStart = 3;
+    private const uint ServiceSystemStart = 4;
+
+    public const uint ServiceDisabledValue = ServiceDisabled;
+    public const uint ServiceAutoStartValue = ServiceAutoStart;
+
+    public static IEnumerable<ServiceEntry> AllServices(CancellationToken cancellationToken)
     {
+        const string servicesPath = @"SYSTEM\CurrentControlSet\Services";
+
         foreach (RegistryView view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            foreach (var (serviceName, imagePath) in ReadServices(view, cancellationToken))
+            RegistryKey? baseKey = null;
+            try
             {
-                string? match = tokens.Match(serviceName) ?? MatchSegmented(imagePath, tokens, allowWeak);
-                if (match is null)
+                using var hive = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+                baseKey = hive.OpenSubKey(servicesPath, writable: false);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (baseKey is null)
+            {
+                continue;
+            }
+
+            using (baseKey)
+            {
+                string[] names;
+                try
+                {
+                    names = baseKey.GetSubKeyNames();
+                }
+                catch
                 {
                     continue;
                 }
 
-                // A service whose executable has been deleted is an orphan, and the
-                // strongest possible signal that the owning product is gone.
-                bool orphaned = ServiceTargetMissing(imagePath);
-
-                yield return new ResidueItem
+                foreach (string name in names)
                 {
-                    Kind = ResidueKind.Service,
-                    Path = serviceName,
-                    DisplayName = serviceName,
-                    MatchedToken = match,
-                    Target = new ServiceTarget(serviceName),
-                    Confidence = orphaned ? Confidence.Safe : Confidence.Moderate,
-                    Note = orphaned ? "executable missing (orphaned)" : "executable still present",
-                };
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    string? imagePath = null;
+                    uint start = 0;
+                    try
+                    {
+                        using var key = baseKey.OpenSubKey(name, writable: false);
+                        imagePath = key?.GetValue("ImagePath") as string;
+                        start = Convert.ToUInt32(key?.GetValue("Start") ?? 0u);
+                    }
+                    catch
+                    {
+                        // Unreadable service; skip.
+                    }
+
+                    if (!string.IsNullOrEmpty(imagePath))
+                    {
+                        yield return new ServiceEntry(name, imagePath, start);
+                    }
+                }
             }
         }
     }
 
-    private static bool ServiceTargetMissing(string imagePath)
+    public static bool IsServiceEnabled(ServiceEntry service) => service.StartType != ServiceDisabled;
+
+    public static string ServiceStartMode(uint startType) => startType switch
+    {
+        0 => "Boot",              // kernel drivers loaded at boot
+        ServiceAutoStart => "Automatic",
+        ServiceDemandStart => "Manual",
+        ServiceSystemStart => "System",
+        ServiceDisabled => "Disabled",
+        _ => "Unknown",
+    };
+
+    public static IEnumerable<ResidueItem> Services(
+        ResidueTokenSet tokens, bool allowWeak, CancellationToken cancellationToken)
+    {
+        foreach (var service in AllServices(cancellationToken))
+        {
+            string? match = tokens.Match(service.Name) ?? MatchSegmented(service.ImagePath, tokens, allowWeak);
+            if (match is null)
+            {
+                continue;
+            }
+
+            // A service whose executable has been deleted is an orphan, and the
+            // strongest possible signal that the owning product is gone.
+            bool orphaned = TargetMissing(service.ImagePath);
+
+            yield return new ResidueItem
+            {
+                Kind = ResidueKind.Service,
+                Path = service.Name,
+                DisplayName = service.Name,
+                MatchedToken = match,
+                Target = new ServiceTarget(service.Name),
+                Confidence = orphaned ? Confidence.Safe : Confidence.Moderate,
+                Note = orphaned
+                    ? $"{service.ImagePath} (executable missing - orphaned)"
+                    : service.ImagePath,
+            };
+        }
+    }
+
+    private static bool TargetMissing(string imagePath)
     {
         try
         {
@@ -214,79 +303,32 @@ public static class SystemArtifacts
         }
     }
 
-    private static IEnumerable<(string Name, string ImagePath)> ReadServices(
-        RegistryView view, CancellationToken cancellationToken)
-    {
-        const string servicesPath = @"SYSTEM\CurrentControlSet\Services";
-
-        RegistryKey? baseKey = null;
-        try
-        {
-            using var hive = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
-            baseKey = hive.OpenSubKey(servicesPath, writable: false);
-        }
-        catch
-        {
-            yield break;
-        }
-
-        if (baseKey is null)
-        {
-            yield break;
-        }
-
-        using (baseKey)
-        {
-            string[] names;
-            try
-            {
-                names = baseKey.GetSubKeyNames();
-            }
-            catch
-            {
-                yield break;
-            }
-
-            foreach (string name in names)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                string? imagePath = null;
-                try
-                {
-                    using var key = baseKey.OpenSubKey(name, writable: false);
-                    if (key?.GetValue("ImagePath") is string value)
-                    {
-                        imagePath = value;
-                    }
-                }
-                catch
-                {
-                    // Unreadable service; skip.
-                }
-
-                if (imagePath is not null)
-                {
-                    yield return (name, imagePath);
-                }
-            }
-        }
-    }
-
     // ---- Scheduled tasks -------------------------------------------------
 
-    public static IEnumerable<ResidueItem> ScheduledTasks(
-        ResidueTokenSet tokens, bool allowWeak, CancellationToken cancellationToken)
+    public sealed record ScheduledTaskEntry(string Name, string Action);
+
+    public static IEnumerable<ScheduledTaskEntry> AllScheduledTasks(CancellationToken cancellationToken)
     {
-        foreach (var (taskName, action) in QueryScheduledTasks(cancellationToken))
+        // Tasks under \Microsoft\Windows are owned by the operating system.
+        const string OsPrefix = @"\Microsoft\Windows\";
+
+        foreach (var (name, action) in QueryScheduledTasks(cancellationToken))
         {
-            // Tasks under \Microsoft\Windows are owned by the operating system.
-            if (taskName.StartsWith(@"\Microsoft\Windows\", StringComparison.OrdinalIgnoreCase))
+            if (name.StartsWith(OsPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            string? match = tokens.Match(taskName) ?? MatchSegmented(action, tokens, allowWeak);
+            yield return new ScheduledTaskEntry(name, action);
+        }
+    }
+
+    public static IEnumerable<ResidueItem> ScheduledTasks(
+        ResidueTokenSet tokens, bool allowWeak, CancellationToken cancellationToken)
+    {
+        foreach (var task in AllScheduledTasks(cancellationToken))
+        {
+            string? match = tokens.Match(task.Name) ?? MatchSegmented(task.Action, tokens, allowWeak);
             if (match is null)
             {
                 continue;
@@ -295,12 +337,12 @@ public static class SystemArtifacts
             yield return new ResidueItem
             {
                 Kind = ResidueKind.ScheduledTask,
-                Path = taskName,
-                DisplayName = taskName.TrimStart('\\'),
+                Path = task.Name,
+                DisplayName = task.Name.TrimStart('\\'),
                 MatchedToken = match,
-                Target = new ScheduledTaskTarget(taskName),
+                Target = new ScheduledTaskTarget(task.Name),
                 Confidence = Confidence.Moderate,
-                Note = string.IsNullOrEmpty(action) ? null : action,
+                Note = string.IsNullOrEmpty(task.Action) ? null : task.Action,
             };
         }
     }
@@ -356,7 +398,6 @@ public static class SystemArtifacts
             string line = raw.TrimEnd('\r');
             if (line.Length == 0)
             {
-                // Blank line terminates a record.
                 if (name.Length > 0)
                 {
                     yield return (name, action);
@@ -443,7 +484,8 @@ public static class SystemArtifacts
 
             foreach (var (name, data) in ReadValues(hive, view, path))
             {
-                string? match = tokens.Match(name) ?? tokens.Match(Path.GetFileNameWithoutExtension(data ?? string.Empty));
+                string? match = tokens.Match(name) ??
+                                tokens.Match(Path.GetFileNameWithoutExtension(data ?? string.Empty));
                 if (match is null)
                 {
                     continue;
@@ -471,7 +513,7 @@ public static class SystemArtifacts
     {
         foreach (string root in ShortcutRoots())
         {
-            foreach (string file in SafeEnumerateShortcuts(root, cancellationToken))
+            foreach (string file in EnumerateShortcuts(root, cancellationToken))
             {
                 string name = Path.GetFileNameWithoutExtension(file);
                 string? match = tokens.Match(name);

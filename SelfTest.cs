@@ -34,6 +34,16 @@ internal static class SelfTest
                 return DumpTokens();
             }
 
+            if (args.Contains("--autorun", StringComparer.OrdinalIgnoreCase))
+            {
+                return DumpAutorun();
+            }
+
+            if (args.Contains("--storeapps", StringComparer.OrdinalIgnoreCase))
+            {
+                return DumpStoreApps();
+            }
+
             var sw = Stopwatch.StartNew();
             var apps = RegistryScanner.Scan();
             sw.Stop();
@@ -161,6 +171,68 @@ internal static class SelfTest
             Console.Error.WriteLine($"SELFTEST FAILED: {ex}");
             return 1;
         }
+    }
+
+    /// <summary>Exercises the startup/autorun enumerators that back the Startup entries view.</summary>
+    private static int DumpAutorun()
+    {
+        var sw = Stopwatch.StartNew();
+
+        var startup = SystemArtifacts.AllStartupEntries(CancellationToken.None).ToList();
+        var services = SystemArtifacts.AllServices(CancellationToken.None).ToList();
+        sw.Stop();
+
+        Console.WriteLine("== Startup / autorun ==");
+        Console.WriteLine($"startup entries  : {startup.Count}");
+        foreach (var entry in startup.Take(10))
+        {
+            Console.WriteLine($"  {Trim(entry.Name, 40),-40} {Trim(entry.Command, 50)}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"services         : {services.Count}");
+        foreach (var service in services.Take(10))
+        {
+            Console.WriteLine($"  {Trim(service.Name, 34),-34} {SystemArtifacts.ServiceStartMode(service.StartType),-10} {Trim(service.ImagePath, 50)}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"elapsed          : {sw.ElapsedMilliseconds} ms (services only)");
+
+        var swTasks = Stopwatch.StartNew();
+        var tasks = SystemArtifacts.AllScheduledTasks(CancellationToken.None).ToList();
+        swTasks.Stop();
+        Console.WriteLine($"scheduled tasks  : {tasks.Count} (excludes \\Microsoft\\Windows\\*) in {swTasks.ElapsedMilliseconds} ms");
+        foreach (var task in tasks.Take(10))
+        {
+            Console.WriteLine($"  {Trim(task.Name, 44),-44} {Trim(task.Action, 44)}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("SELFTEST OK");
+        return 0;
+    }
+
+    /// <summary>Exercises the Store/MSIX app enumeration.</summary>
+    private static int DumpStoreApps()
+    {
+        var sw = Stopwatch.StartNew();
+        var apps = WindowsApps.Scan();
+        sw.Stop();
+
+        Console.WriteLine("== Windows Apps (Store / MSIX) ==");
+        Console.WriteLine($"count   : {apps.Count}");
+        Console.WriteLine($"elapsed : {sw.ElapsedMilliseconds} ms");
+        Console.WriteLine();
+
+        foreach (var app in apps.Take(25))
+        {
+            Console.WriteLine($"  {Trim(app.Name, 34),-34} {Trim(app.Version, 12),-12} {Trim(app.PublisherDisplay, 30),-30} {(app.IsFramework ? "framework" : "")}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("SELFTEST OK");
+        return apps.Count > 0 ? 0 : 4;
     }
 
     /// <summary>Prints the derived search tokens for every installed program.</summary>

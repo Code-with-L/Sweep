@@ -36,6 +36,10 @@ public sealed class InstalledApp
     public string QuietUninstallString { get; init; } = "";
     public string DisplayIcon { get; init; } = "";
     public string InstallDateRaw { get; init; } = "";
+    public string Comments { get; init; } = "";
+    public string UrlInfoAbout { get; init; } = "";
+    public string HelpLink { get; init; } = "";
+    public string Contact { get; init; } = "";
     public long EstimatedSizeBytes { get; init; }
     public bool SystemComponent { get; init; }
     public RegLocation Location { get; init; }
@@ -49,6 +53,62 @@ public sealed class InstalledApp
         : Location.View == RegistryView.Registry32 ? "All users (32-bit)" : "All users";
 
     public DateTime? InstallDate => ParseInstallDate(InstallDateRaw);
+
+    private Lazy<string?> _peArchitecture = null!;
+
+    private string? _drive;
+
+    private string PeArchitecture()
+    {
+        _peArchitecture ??= new Lazy<string?>(
+            () => PeHeader.ReadArchitecture(ExecutablePath ?? string.Empty),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+
+        return _peArchitecture.Value ?? string.Empty;
+    }
+
+    /// <summary>Drive letter the program lives on, used by the drive filter.</summary>
+    public string Drive => _drive ??= ResolveDrive();
+
+    /// <summary>
+    /// "32-bit" or "64-bit", determined from the real PE header of the program rather than
+    /// from which registry view the entry came from. The view only tells us how the entry
+    /// is stored, not how the program is built.
+    /// </summary>
+    public string Architecture
+    {
+        get
+        {
+            string detected = PeArchitecture();
+            return detected.Length > 0
+                ? detected
+                : Location.View == RegistryView.Registry32 ? "32-bit" : "64-bit";
+        }
+    }
+
+    private string ResolveDrive()
+    {
+        string? path = ExecutablePath ?? (string.IsNullOrWhiteSpace(InstallLocation) ? null : InstallLocation);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string? root = Path.GetPathRoot(path);
+            return string.IsNullOrEmpty(root) ? string.Empty : root;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    public string WebsiteDisplay => FirstNonEmpty(UrlInfoAbout, Contact);
+
+    private static string FirstNonEmpty(params string[] values) =>
+        values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
 
     public string SizeDisplay => EstimatedSizeBytes switch
     {

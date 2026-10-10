@@ -90,6 +90,23 @@ internal static class SettingsStore
         }
     }
 
+    public static void ExportTo(string path, AppSettings settings)
+    {
+        File.WriteAllText(path, JsonSerializer.Serialize(settings, Options));
+    }
+
+    /// <summary>
+    /// Reads settings from a file. Values that fail to deserialise fall back to the
+    /// defaults for that field rather than discarding the whole file.
+    /// </summary>
+    public static AppSettings ImportFrom(string path)
+    {
+        string json = File.ReadAllText(path);
+        var loaded = JsonSerializer.Deserialize<AppSettings>(json, Options) ?? new AppSettings();
+        Validate(loaded);
+        return loaded;
+    }
+
     private static void Validate(AppSettings s)
     {
         s.FileScanDepth = Math.Clamp(s.FileScanDepth, 1, 6);

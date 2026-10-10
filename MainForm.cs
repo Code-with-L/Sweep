@@ -49,8 +49,9 @@ internal sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         KeyPreview = true;
 
-        BuildMenu();
+BuildMenu();
         var toolbar = BuildToolbar();
+        var filters = BuildFilterBar();
         var bottom = BuildBottomBar();
         var status = BuildStatusStrip();
         BuildGrid();
@@ -62,7 +63,7 @@ internal sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 6,
             Margin = Padding.Empty,
             Padding = Padding.Empty,
         };
@@ -70,15 +71,17 @@ internal sealed class MainForm : Form
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         root.Controls.Add(_menu, 0, 0);
         root.Controls.Add(toolbar, 0, 1);
-        root.Controls.Add(_grid, 0, 2);
-        root.Controls.Add(bottom, 0, 3);
-        root.Controls.Add(status, 0, 4);
+        root.Controls.Add(filters, 0, 2);
+        root.Controls.Add(_grid, 0, 3);
+        root.Controls.Add(bottom, 0, 4);
+        root.Controls.Add(status, 0, 5);
 
         Controls.Add(root);
 
@@ -159,11 +162,19 @@ internal sealed class MainForm : Form
         removal.DropDownItems.Add(_lastUninstalledItem);
 
         var view = new ToolStripMenuItem("&View");
-        _themeDarkItem = new ToolStripMenuItem("&Dark theme", null, (_, _) => SetTheme(ThemeMode.Dark));
-        _themeLightItem = new ToolStripMenuItem("&Light theme", null, (_, _) => SetTheme(ThemeMode.Light));
-        view.DropDownItems.AddRange([_themeDarkItem, _themeLightItem]);
+        view.DropDownItems.Add(new ToolStripMenuItem("&Startup entries...", null, (_, _) => OpenForm<AutorunForm>())
+        {
+            Name = "startup",
+        });
+        view.DropDownItems.Add(new ToolStripMenuItem("&Windows Apps (Store)...", null, (_, _) => OpenForm<WindowsAppsForm>())
+        {
+            Name = "storeApps",
+        });
         view.DropDownItems.Add(new ToolStripSeparator());
-        view.DropDownItems.Add(new ToolStripMenuItem("&Activity log...", null, (_, _) => ShowActivity())
+        view.DropDownItems.Add(_themeDarkItem = new ToolStripMenuItem("&Dark theme", null, (_, _) => SetTheme(ThemeMode.Dark)));
+        view.DropDownItems.Add(_themeLightItem = new ToolStripMenuItem("&Light theme", null, (_, _) => SetTheme(ThemeMode.Light)));
+        view.DropDownItems.Add(new ToolStripSeparator());
+        view.DropDownItems.Add(new ToolStripMenuItem("Activity &log...", null, (_, _) => ShowActivity())
         {
             Name = "activity",
             ShortcutKeys = Keys.Control | Keys.L,
@@ -175,6 +186,8 @@ internal sealed class MainForm : Form
             Name = "settings",
             ShortcutKeys = Keys.Control | Keys.Oemcomma,
         });
+        options.DropDownItems.Add(new ToolStripMenuItem("&Export all settings...", null, (_, _) => ExportSettings()));
+        options.DropDownItems.Add(new ToolStripMenuItem("&Import all settings...", null, (_, _) => ImportSettings()));
         options.DropDownItems.Add(new ToolStripSeparator());
         options.DropDownItems.Add(new ToolStripMenuItem("Open &quarantine folder", null, (_, _) => OpenQuarantineFolder())
         {
@@ -278,6 +291,79 @@ private Control BuildToolbar()
         _adminBadge.Location = new Point(right - _scanButton.Width - 120 - _uninstallButton.Width, 17);
     }
 
+    private Panel BuildFilterBar()
+    {
+        var panel = new Panel { Dock = DockStyle.Fill, Height = 40, Padding = new Padding(12, 6, 12, 6) };
+        panel.BackColor = Theme.Current.Surface;
+
+        var flow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Theme.Current.Surface,
+            Margin = Padding.Empty,
+        };
+
+        _typeFilter.Items.AddRange(["All", "32-bit", "64-bit"]);
+        _typeFilter.SelectedIndex = 0;
+        _sizeFilter.Items.AddRange(["All", "> 10 MB", "> 100 MB", "> 1024 MB"]);
+        _sizeFilter.SelectedIndex = 0;
+        _driveFilter.Items.Add("All");
+
+        foreach (var box in new[] { _typeFilter, _sizeFilter, _driveFilter })
+        {
+            box.BackColor = Theme.Current.SurfaceAlt;
+            box.ForeColor = Theme.Current.Text;
+            box.Margin = new Padding(0, 1, 10, 0);
+            box.SelectedIndexChanged += (_, _) => ApplyFilter();
+        }
+
+        _countLabel.AutoSize = false;
+        _countLabel.Size = new Size(150, 24);
+        _countLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _countLabel.ForeColor = Theme.Current.TextDim;
+        _countLabel.Margin = new Padding(6, 0, 0, 0);
+
+        flow.Controls.Add(MakeLabel("Type:"));
+        flow.Controls.Add(_typeFilter);
+        flow.Controls.Add(MakeLabel("Size:"));
+        flow.Controls.Add(_sizeFilter);
+        flow.Controls.Add(MakeLabel("Drive:"));
+        flow.Controls.Add(_driveFilter);
+        flow.Controls.Add(_countLabel);
+
+        panel.Controls.Add(flow);
+        return panel;
+    }
+
+    private static Label MakeLabel(string text) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        Margin = new Padding(0, 7, 5, 0),
+    };
+
+    /// <summary>Rebuilds the drive list once programs have been enumerated.</summary>
+    private void RefreshDriveFilter()
+    {
+        string selected = _driveFilter.SelectedItem?.ToString() ?? "All";
+        _driveFilter.Items.Clear();
+        _driveFilter.Items.Add("All");
+
+        foreach (string drive in _all
+                     .Select(a => a.Drive)
+                     .Where(d => !string.IsNullOrEmpty(d))
+                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            _driveFilter.Items.Add(drive);
+        }
+
+        int index = _driveFilter.Items.IndexOf(selected);
+        _driveFilter.SelectedIndex = index >= 0 ? index : 0;
+    }
+
     private Panel BuildBottomBar()
     {
         var panel = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(14, 8, 14, 8) };
@@ -310,21 +396,59 @@ private Control BuildToolbar()
     {
         Native.EnableDoubleBuffer(_grid);
 
-        _grid.Dock = DockStyle.Fill;
+_grid.Dock = DockStyle.Fill;
         _grid.VirtualMode = true;
         _grid.AllowUserToAddRows = false;
         _grid.AllowUserToDeleteRows = false;
         _grid.AllowUserToResizeRows = false;
         _grid.ReadOnly = true;
+
+
         _grid.Columns.Add(new DataGridViewImageColumn { Name = "icon", Width = 46, Resizable = DataGridViewTriState.False });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Program", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 220 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "version", HeaderText = "Version", Width = 110 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "publisher", HeaderText = "Publisher", Width = 180 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "size", HeaderText = "Size", Width = 95 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "installed", HeaderText = "Installed", Width = 110 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "scope", HeaderText = "Scope", Width = 135 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Application", ToolTipText = "Application", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 200 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "size", HeaderText = "Size", ToolTipText = "Size", Width = 92 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "version", HeaderText = "Version", ToolTipText = "Version", Width = 105 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "arch", HeaderText = "Type", ToolTipText = "32-bit or 64-bit program", Width = 78 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "installed", HeaderText = "Install Date", ToolTipText = "Install Date", Width = 105 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "publisher", HeaderText = "Company", ToolTipText = "Company / Publisher", Width = 165 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "website", HeaderText = "Website", ToolTipText = "Website", Width = 165 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "comment", HeaderText = "Comment", ToolTipText = "Comment", Width = 150 });
 
         _grid.CellValueNeeded += OnCellValueNeeded;
+        _grid.ColumnHeaderMouseClick += (_, e) => OnColumnHeaderClick(e.ColumnIndex);
+    }
+
+    private void OnColumnHeaderClick(int columnIndex)
+    {
+        if (columnIndex < 0 || columnIndex >= _grid.Columns.Count)
+        {
+            return;
+        }
+
+        string column = _grid.Columns[columnIndex].Name;
+        if (column == "icon")
+        {
+            return;
+        }
+
+        if (_sortColumn == column)
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumn = column;
+            _sortAscending = true;
+        }
+
+        foreach (DataGridViewColumn col in _grid.Columns)
+        {
+            col.HeaderCell.SortGlyphDirection = col.Name == _sortColumn
+                ? (_sortAscending ? SortOrder.Ascending : SortOrder.Descending)
+                : SortOrder.None;
+        }
+
+        ApplyFilter();
     }
 
     private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
@@ -334,7 +458,7 @@ private Control BuildToolbar()
             return;
         }
 
-        var app = _filtered[e.RowIndex];
+var app = _filtered[e.RowIndex];
         string column = _grid.Columns[e.ColumnIndex].Name;
 
         e.Value = column switch
@@ -342,10 +466,12 @@ private Control BuildToolbar()
             "icon" => IconProvider.Get(app),
             "name" => app.DisplayName,
             "version" => string.IsNullOrEmpty(app.DisplayVersion) ? "-" : app.DisplayVersion,
+            "arch" => app.Architecture,
             "publisher" => string.IsNullOrEmpty(app.Publisher) ? "-" : app.Publisher,
             "size" => string.IsNullOrEmpty(app.SizeDisplay) ? "-" : app.SizeDisplay,
-            "installed" => app.InstallDate?.ToString("yyyy-MM-dd") ?? "-",
-            "scope" => app.ScopeLabel,
+            "installed" => app.InstallDate?.ToString("dd/MM/yyyy") ?? "-",
+            "website" => string.IsNullOrEmpty(app.WebsiteDisplay) ? "-" : app.WebsiteDisplay,
+            "comment" => string.IsNullOrEmpty(app.Comments) ? "-" : app.Comments,
             _ => null,
         };
     }
@@ -353,9 +479,21 @@ private Control BuildToolbar()
     private void BuildContextMenu()
     {
         _contextMenu.Items.Add(new ToolStripMenuItem("Uninstall...", null, async (_, _) => await UninstallSelectedAsync()));
-        _contextMenu.Items.Add(new ToolStripMenuItem("Scan leftovers...", null, async (_, _) => ScanSelected()));
+        _contextMenu.Items.Add(new ToolStripMenuItem("Scan leftovers...", null, (_, _) => ScanSelected()));
+        _contextMenu.Items.Add(new ToolStripMenuItem("&Kill running processes", null, (_, _) => KillProcesses(false))
+        {
+            Name = "kill",
+        });
+        _contextMenu.Items.Add(new ToolStripMenuItem("Kill processes and remove entry", null, (_, _) => KillProcesses(true))
+        {
+            Name = "killDelete",
+        });
         _contextMenu.Items.Add(new ToolStripSeparator());
-        _contextMenu.Items.Add(new ToolStripMenuItem("Open install folder", null, (_, _) =>
+        _contextMenu.Items.Add(new ToolStripMenuItem("&Run", null, (_, _) => RunProgram())
+        {
+            Name = "run",
+        });
+        _contextMenu.Items.Add(new ToolStripMenuItem("Open containing folder", null, (_, _) =>
         {
             var app = SelectedApp();
             if (app is not null)
@@ -363,16 +501,17 @@ private Control BuildToolbar()
                 OpenInstallLocation(app);
             }
         }));
-        _contextMenu.Items.Add(new ToolStripMenuItem("Open data folder", null, (_, _) =>
+        _contextMenu.Items.Add(new ToolStripMenuItem("Open registry key", null, (_, _) => OpenRegistryKey()));
+        _contextMenu.Items.Add(new ToolStripMenuItem("Open &website", null, (_, _) => OpenUrlForSelected(a => a.WebsiteDisplay))
         {
-            var app = SelectedApp();
-            if (app is not null)
-            {
-                OpenPath(app.InstallLocation, mustBeDirectory: true);
-            }
-        }));
+            Name = "website",
+        });
+        _contextMenu.Items.Add(new ToolStripMenuItem("Open help link", null, (_, _) => OpenUrlForSelected(a => a.HelpLink))
+        {
+            Name = "help",
+        });
         _contextMenu.Items.Add(new ToolStripSeparator());
-        _contextMenu.Items.Add(new ToolStripMenuItem("Copy details", null, (_, _) => CopyDetails()));
+        _contextMenu.Items.Add(new ToolStripMenuItem("Copy to clipboard", null, (_, _) => CopyDetails()));
         _contextMenu.Items.Add(new ToolStripMenuItem("Remove leftover registry entry", null, (_, _) => RemoveEntryOnly())
         {
             Name = "removeEntry",
@@ -380,6 +519,167 @@ private Control BuildToolbar()
 
         _grid.ContextMenuStrip = _contextMenu;
         _contextMenu.Opening += (_, _) => UpdateSelection();
+    }
+
+    private void UpdateContextMenuState()
+    {
+        var app = SelectedApp();
+        bool has = app is not null;
+
+        SetContextEnabled("kill", has);
+        SetContextEnabled("killDelete", has);
+        SetContextEnabled("run", has);
+        SetContextEnabled("website", has && !string.IsNullOrWhiteSpace(app!.WebsiteDisplay));
+        SetContextEnabled("help", has && !string.IsNullOrWhiteSpace(app!.HelpLink));
+    }
+
+    private void SetContextEnabled(string name, bool value)
+    {
+        if (_contextMenu.Items[name] is ToolStripItem item)
+        {
+            item.Enabled = value;
+        }
+    }
+
+    private void RunProgram()
+    {
+        var app = SelectedApp();
+        string? exe = app?.ExecutablePath;
+        if (app is null || string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
+        {
+            MessageBox.Show(this, "This program does not report an executable that can be launched.", "Sweep",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = exe,
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(exe) ?? Environment.CurrentDirectory,
+            });
+            LogStore.Info($"Launched \"{app.DisplayName}\".");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not launch \"{app.DisplayName}\":\r\n{ex.Message}", "Sweep",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void OpenRegistryKey()
+    {
+        var app = SelectedApp();
+        if (app is null)
+        {
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "regedit.exe",
+                UseShellExecute = true,
+                ArgumentList = { app.Location.SubKey },
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not open regedit:\r\n{ex.Message}", "Sweep",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void OpenUrlForSelected(Func<InstalledApp, string> selector)
+    {
+        var app = SelectedApp();
+        if (app is null)
+        {
+            return;
+        }
+
+        string url = selector(app);
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return;
+        }
+
+        // Registry values frequently omit the scheme.
+        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = "https://" + url;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not open the link:\r\n{ex.Message}", "Sweep",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Stops processes belonging to the selected program. Optionally also drops its
+    /// Add/Remove Programs entry, which is the "stuck entry" case where a program is still
+    /// listed after its files are already gone.
+    /// </summary>
+    private void KillProcesses(bool alsoRemoveEntry)
+    {
+        var app = SelectedApp();
+        if (app is null || _busy)
+        {
+            return;
+        }
+
+        var running = ProcessHunter.FindFor(app);
+        if (running.Count == 0)
+        {
+            SetStatus($"No running processes belong to \"{app.DisplayName}\".");
+            return;
+        }
+
+        string list = string.Join(Environment.NewLine, running.Select(p => $"  {p.Name} (PID {p.ProcessId})"));
+        var answer = MessageBox.Show(this,
+            $"{running.Count} process(es) belonging to \"{app.DisplayName}\" are running:" +
+            $"{Environment.NewLine}{list}{Environment.NewLine}{Environment.NewLine}Stop them now?",
+            "Sweep", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+        if (answer != DialogResult.Yes)
+        {
+            return;
+        }
+
+        int killed = ProcessHunter.Kill(running);
+        LogStore.Success($"Stopped {killed} process(es) for \"{app.DisplayName}\".");
+        SetStatus($"Stopped {killed} process(es).");
+
+        if (!alsoRemoveEntry)
+        {
+            return;
+        }
+
+        var confirm = MessageBox.Show(this,
+            $"Also remove the Add/Remove Programs entry for \"{app.DisplayName}\"?" +
+            $"{Environment.NewLine}{Environment.NewLine}" +
+            "This only hides it from the list. It does not remove the program's files.",
+            "Sweep", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+        if (confirm == DialogResult.Yes)
+        {
+            RegistryScanner.DeleteEntry(app.Location);
+            _ = LoadAppsAsync();
+        }
     }
 
     // ---- Data -----------------------------------------------------------
@@ -395,9 +695,10 @@ private Control BuildToolbar()
 
         try
         {
-            var apps = await Task.Run(() => RegistryScanner.Scan());
+var apps = await Task.Run(() => RegistryScanner.Scan());
             _all = apps;
             IconProvider.Clear();
+            RefreshDriveFilter();
             ApplyFilter();
 
             string elevated = Program.IsElevated ? "elevated" : "not elevated";
@@ -440,17 +741,56 @@ private Control BuildToolbar()
         BeginInvoke((Action)(() => OpenResidueForm(target)));
     }
 
-    private void ApplyFilter()
+private void ApplyFilter()
     {
         string query = _search.Text.Trim();
 
-        _filtered = query.Length == 0
-            ? _all
-            : _all.Where(a =>
+        IEnumerable<InstalledApp> results = _all;
+
+        if (query.Length > 0)
+        {
+            results = results.Where(a =>
                 Contains(a.DisplayName, query) ||
                 Contains(a.Publisher, query) ||
                 Contains(a.InstallLocation, query) ||
-                Contains(a.DisplayVersion, query)).ToList();
+                Contains(a.DisplayVersion, query) ||
+                Contains(a.Comments, query) ||
+                Contains(a.WebsiteDisplay, query));
+        }
+
+        // Type filter: 32-bit / 64-bit, read from the real PE header.
+        string? typeFilter = _typeFilter.SelectedIndex switch
+        {
+            1 => "32-bit",
+            2 => "64-bit",
+            _ => null,
+        };
+        if (typeFilter is not null)
+        {
+            results = results.Where(a => a.Architecture == typeFilter);
+        }
+
+        // Size filter. Entries with no reported size are excluded by a size filter, since
+        // nothing can be asserted about them.
+        long? minimumSize = _sizeFilter.SelectedIndex switch
+        {
+            1 => 10L * 1024 * 1024,
+            2 => 100L * 1024 * 1024,
+            3 => 1024L * 1024 * 1024,
+            _ => null,
+        };
+        if (minimumSize is not null)
+        {
+            results = results.Where(a => a.EstimatedSizeBytes >= minimumSize.Value);
+        }
+
+        string drive = _driveFilter.SelectedItem?.ToString() ?? "All";
+        if (drive != "All")
+        {
+            results = results.Where(a => a.Drive.Equals(drive, StringComparison.OrdinalIgnoreCase));
+        }
+
+        _filtered = Sort(results).ToList();
 
         _grid.RowCount = _filtered.Count;
 
@@ -459,9 +799,51 @@ private Control BuildToolbar()
             _grid.CurrentCell = _grid.Rows[0].Cells["name"];
         }
 
+        _countLabel.Text = _filtered.Count == _all.Count
+            ? $"{_all.Count} programs"
+            : $"{_filtered.Count} of {_all.Count} programs";
+
         UpdateSelection();
         PrefetchIcons();
     }
+
+    private IEnumerable<InstalledApp> Sort(IEnumerable<InstalledApp> source)
+    {
+        switch (_sortColumn)
+        {
+            case "size":
+                return _sortAscending
+                    ? source.OrderBy(a => a.EstimatedSizeBytes)
+                    : source.OrderByDescending(a => a.EstimatedSizeBytes);
+
+            case "installed":
+                return _sortAscending
+                    ? source.OrderBy(a => a.InstallDate ?? DateTime.MinValue)
+                    : source.OrderByDescending(a => a.InstallDate ?? DateTime.MinValue);
+
+            default:
+                Func<InstalledApp, string> key = _sortColumn switch
+                {
+                    "version" => a => a.DisplayVersion,
+                    "arch" => a => a.Architecture,
+                    "publisher" => a => a.Publisher,
+                    "website" => a => a.WebsiteDisplay,
+                    "comment" => a => a.Comments,
+                    _ => a => a.DisplayName,
+                };
+
+                return _sortAscending
+                    ? source.OrderBy(key, StringComparer.CurrentCultureIgnoreCase)
+                    : source.OrderByDescending(key, StringComparer.CurrentCultureIgnoreCase);
+        }
+    }
+
+    private readonly ComboBox _typeFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
+    private readonly ComboBox _sizeFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 108 };
+    private readonly ComboBox _driveFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
+    private readonly Label _countLabel = new() { AutoSize = true };
+    private string _sortColumn = "name";
+    private bool _sortAscending = true;
 
     private CancellationTokenSource? _iconCts;
 
@@ -523,6 +905,7 @@ private Control BuildToolbar()
         _uninstallButton.Enabled = hasApp && app!.HasUninstaller && !_busy;
         _scanButton.Enabled = hasApp && !_busy;
         _contextMenu.Items["removeEntry"]!.Enabled = hasApp;
+        UpdateContextMenuState();
 
         if (app is null)
         {
@@ -944,6 +1327,66 @@ private Control BuildToolbar()
     }
 
     private static string Csv(string value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
+
+    private void OpenForm<T>() where T : Form, new()
+    {
+        using var form = new T();
+        form.ShowDialog(this);
+    }
+
+    private void ExportSettings()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Filter = "Settings file (*.json)|*.json",
+            FileName = $"sweep-settings-{DateTime.Now:yyyyMMdd}.json",
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            SettingsStore.ExportTo(dialog.FileName, _settings);
+            LogStore.Success($"Settings exported to {dialog.FileName}");
+            SetStatus("Settings exported.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not export settings:\r\n{ex.Message}", "Sweep",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ImportSettings()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Filter = "Settings file (*.json)|*.json",
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            _settings = SettingsStore.ImportFrom(dialog.FileName);
+            SettingsStore.Save(_settings);
+            Theme.ApplyMode(_settings.Theme);
+            ApplyTheme();
+            LogStore.Success("Settings imported.");
+            SetStatus("Settings imported.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not import settings:\r\n{ex.Message}", "Sweep",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
 
     private void ShowSettings()
     {

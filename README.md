@@ -34,6 +34,16 @@ cloud database, no telemetry.
   | Registry keys | `HKCU\Software`, `HKLM\SOFTWARE` in both WOW64 views |
 
 - **Rates every match** as Safe, Moderate or Risky. Risky items start unchecked.
+- **Lists Store/MSIX apps** in a separate module. These never appear in the uninstall
+  registry keys, so the classic program list cannot show them at all.
+- **Manages startup entries**: Run/RunOnce, Startup folder shortcuts, Windows services and
+  scheduled tasks in one list. Disabling a service uses the Service Control Manager and
+  disabling a task uses `schtasks` — both reversible. Registry edits are not used, because
+  SCM caches start types and a registry edit appears to work then silently reverts.
+- **Filters and sorts** by type (32/64-bit, read from the real PE header), by size, by
+  drive, and by any column.
+- **Context menu** actions: run, open containing folder, open registry key, open website,
+  open help link, kill the program's running processes, copy details.
 - **Quarantines instead of deleting** by default, so a wrong match can be undone, and
   reports loudly if the undo manifest cannot be written.
 - **Creates a restore point** before each removal when System Protection is enabled, and
@@ -87,6 +97,10 @@ Sweep.exe --selftest --dump-uninstallers
 
 # Show derived search tokens for every installed program
 Sweep.exe --selftest --tokens
+
+# Enumerate Store/MSIX apps and startup entries
+Sweep.exe --selftest --storeapps
+Sweep.exe --selftest --autorun
 ```
 
 `tools\capture.ps1` takes DPI-aware screenshots of the app or a dialog, used for UI
@@ -121,15 +135,23 @@ Measures taken:
 ## Limitations
 
 - There is no per-vendor removal recipe database. Detection is generic and name-based, so
-  it finds the common cases but cannot know an application's bespoke quirks.
+  it finds the common cases but cannot know an application's bespoke quirks. Uninstall
+  history is recorded locally in the activity log; there is no shared cloud log service.
 - Registry matching is name-based, so a third-party key that happens to contain the
   product name can be reported. This is why results are reviewed rather than deleted
   blindly, and why everything is rated by confidence.
-- Browser extensions and MSI component/orphan analysis are not scanned. Both require
-  profile- and installer-state-aware parsing that can do real damage if it is wrong.
+- Browser extensions / add-ons and BHOs are **not** enumerated. Reading a browser's
+  extension and preference stores safely requires per-profile parsing, and a mistake there
+  breaks the user's browser rather than just their leftovers.
+- MSI component/orphan analysis is not done. `Win32_Product`-style queries trigger
+  self-repair on every package they touch.
+- Startup entries (`Run`/`RunOnce`) have no native "disabled" state. Windows only offers
+  the undocumented `StartupApproved` blob, so Sweep reports that these must be removed
+  rather than faking a disable.
 - `PATH` contents are never edited automatically; only environment variable *names* are
   matched.
-- Uninstallers that always show a UI regardless of switches will not become silent.
+- Store app removal needs PowerShell; a locked-down machine without it cannot uninstall
+  MSIX packages from here.
 - Quarantined items are moved, so restoring does not restore timestamps or ACLs exactly.
 
 ## Licence
