@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Sweep</AssemblyName>
+    <RootNamespace>Sweep</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Product>Sweep App Uninstaller</Product>
+    <AssemblyTitle>Sweep</AssemblyTitle>
+    <Company>Sweep</Company>
+    <Version>1.0.0</Version>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RuntimeIdentifiers>win-arm64;win-x64;win-x86</RuntimeIdentifiers>
+    <Platforms>AnyCPU;ARM64;x64;x86</Platforms>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <NeutralLanguage>en</NeutralLanguage>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+</Project>

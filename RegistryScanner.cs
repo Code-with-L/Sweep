@@ -1,0 +1,315 @@
+using System.Collections.Concurrent;
+using Microsoft.Win32;
+
+namespace Sweep;
+
+/// <summary>
+/// Enumerates installed programs from the Windows uninstall registry keys.
+/// Uses explicit RegistryView handling rather than relying on process bitness, which is
+/// what makes this correct under WOW64 and on Windows-on-ARM.
+/// </summary>
+public static class RegistryScanner
+{
+    public const string UninstallBase = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+
+    private static readonly (RegistryHive Hive, RegistryView View, string Label)[] Sources =
+    [
+        (RegistryHive.LocalMachine, RegistryView.Registry64, "Machine 64"),
+        (RegistryHive.LocalMachine, RegistryView.Registry32, "Machine 32"),
+        (RegistryHive.CurrentUser, RegistryView.Registry64, "User 64"),
+    ];
+
+    private static readonly HashSet<string> UpdatePrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Update for ", "Hotfix for ", "Security Update for ", "Update (", "Security Update (",
+    };
+
+    private static readonly HashSet<string> UpdateReleaseTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Update", "Hotfix", "Security Update",
+    };
+
+    public static IReadOnlyList<(RegistryHive Hive, RegistryView View, string Label)> SourcesInfo => Sources;
+
+    public static List<InstalledApp> Scan(CancellationToken cancellationToken = default)
+    {
+        var results = new List<InstalledApp>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (hive, view, _) in Sources)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            RegistryKey root;
+            try
+            {
+                root = RegistryKey.OpenBaseKey(hive, view);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                continue;
+            }
+
+            using (root)
+            {
+                RegistryKey? uninstall;
+                try
+                {
+                    uninstall = root.OpenSubKey(UninstallBase, writable: false);
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+                {
+                    continue;
+                }
+
+                if (uninstall is null)
+                {
+                    continue;
+                }
+
+                using (uninstall)
+                {
+                    string[] subKeys;
+                    try
+                    {
+                        subKeys = uninstall.GetSubKeyNames();
+                    }
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+                    {
+                        continue;
+                    }
+
+                    foreach (string subKeyName in subKeys)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        RegistryKey? subKey;
+                        try
+                        {
+                            subKey = uninstall.OpenSubKey(subKeyName, writable: false);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        if (subKey is null)
+                        {
+                            continue;
+                        }
+
+                        using (subKey)
+                        {
+                            if (TryReadApp(subKey, subKeyName, hive, view, out var app) && app is not null)
+                            {
+                                string key = $"{app.DisplayName}|{app.DisplayVersion}|{app.UninstallString}";
+                                if (seen.Add(key))
+                                {
+                                    results.Add(app);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return results
+            .OrderBy(a => a.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    private static bool TryReadApp(
+        RegistryKey key,
+        string subKeyName,
+        RegistryHive hive,
+        RegistryView view,
+        out InstalledApp? app)
+    {
+        app = null;
+
+        string displayName = ReadString(key, "DisplayName") ?? string.Empty;
+        if (displayName.Length == 0)
+        {
+            return false;
+        }
+
+        if (ReadInt(key, "SystemComponent") == 1)
+        {
+            return false;
+        }
+
+        // Components are children of a product; listing them separately is noise.
+        if (!string.IsNullOrWhiteSpace(ReadString(key, "ParentKeyName")))
+        {
+            return false;
+        }
+
+        string releaseType = ReadString(key, "ReleaseType") ?? string.Empty;
+        if (UpdateReleaseTypes.Contains(releaseType))
+        {
+            return false;
+        }
+
+        foreach (string prefix in UpdatePrefixes)
+        {
+            if (displayName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        string uninstall = ReadString(key, "UninstallString") ?? string.Empty;
+        string location = ReadString(key, "InstallLocation") ?? string.Empty;
+
+        // An entry with neither an uninstaller nor an install path is inert.
+        if (uninstall.Length == 0 && location.Length == 0)
+        {
+            return false;
+        }
+
+        int estimatedSizeKb = ReadInt(key, "EstimatedSize") ?? 0;
+
+        app = new InstalledApp
+        {
+            DisplayName = displayName,
+            DisplayVersion = ReadString(key, "DisplayVersion") ?? string.Empty,
+            Publisher = ReadString(key, "Publisher") ?? string.Empty,
+            InstallLocation = location,
+            UninstallString = uninstall,
+            QuietUninstallString = ReadString(key, "QuietUninstallString") ?? string.Empty,
+            DisplayIcon = ReadString(key, "DisplayIcon") ?? string.Empty,
+            InstallDateRaw = ReadRawString(key, "InstallDate") ?? string.Empty,
+            EstimatedSizeBytes = estimatedSizeKb > 0 ? (long)estimatedSizeKb * 1024 : 0,
+            SystemComponent = ReadInt(key, "SystemComponent") == 1,
+            Location = new RegLocation(hive, view, UninstallBase + "\\" + subKeyName),
+        };
+
+        return true;
+    }
+
+    private static string? ReadRawString(RegistryKey key, string name)
+    {
+        try
+        {
+            return key.GetValue(name)?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadString(RegistryKey key, string name)
+    {
+        try
+        {
+            return key.GetValue(name, null) as string;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    private static int? ReadInt(RegistryKey key, string name)
+    {
+        try
+        {
+            return key.GetValue(name, null) switch
+            {
+                int i => i,
+                long l when l is >= int.MinValue and <= int.MaxValue => (int)l,
+                uint u when u <= int.MaxValue => (int)u,
+                _ => null,
+            };
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Removes an app's uninstall entry (used after a manual removal).</summary>
+    public static bool DeleteEntry(RegLocation location)
+    {
+        try
+        {
+            using var root = RegistryKey.OpenBaseKey(location.Hive, location.View);
+            root.DeleteSubKeyTree(location.SubKey, throwOnMissingSubKey: false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogStore.Error($"Could not delete registry entry {location}", ex);
+            return false;
+        }
+    }
+
+    public static bool EntryExists(RegLocation location)
+    {
+        try
+        {
+            using var root = RegistryKey.OpenBaseKey(location.Hive, location.View);
+            using var key = root.OpenSubKey(location.SubKey, writable: false);
+            return key is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+}
+
+/// <summary>
+/// Lazily extracts and caches application icons. Icons are only pulled for rows that are
+/// actually visible, which keeps startup fast with several hundred programs installed.
+/// </summary>
+public static class IconCache
+{
+    private const int RequestedSize = 32;
+    private static readonly ConcurrentDictionary<string, Image?> Cache = new(StringComparer.OrdinalIgnoreCase);
+
+    public static Image? Get(InstalledApp app)
+    {
+        string key = app.ExecutablePath ?? app.DisplayName;
+        return Cache.GetOrAdd(key, _ => Load(app.ExecutablePath));
+    }
+
+    public static void Clear() => Cache.Clear();
+
+    private static Image? Load(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return null;
+        }
+
+        var large = new IntPtr[1];
+        try
+        {
+            uint count = Native.ExtractIconExW(path, 0, large, null, 1);
+            if (count == 0 || large[0] == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            try
+            {
+                using var handleIcon = Icon.FromHandle(large[0]);
+                // FromHandle does not own the handle, so clone before releasing it.
+                using var sized = new Icon(handleIcon, RequestedSize, RequestedSize);
+                using var bitmap = sized.ToBitmap();
+                return new Bitmap(bitmap);
+            }
+            finally
+            {
+                Native.DestroyIcon(large[0]);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
