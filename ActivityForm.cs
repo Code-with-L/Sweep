@@ -1,7 +1,7 @@
 namespace Sweep;
 
 /// <summary>Shows the session activity log, which is also the record of what was changed.</summary>
-internal sealed class ActivityForm : Form
+internal sealed class ActivityForm : ThemedForm
 {
     private readonly ListView _list = new() { View = View.Details, FullRowSelect = true, HideSelection = false };
 

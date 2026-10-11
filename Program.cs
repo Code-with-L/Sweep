@@ -15,14 +15,23 @@ internal static class Program
             return SelfTest.Run(args).GetAwaiter().GetResult();
         }
 
+        if (args.Any(a => string.Equals(a, "--audit", StringComparison.OrdinalIgnoreCase)))
+        {
+            return Audit.Run(args).GetAwaiter().GetResult();
+        }
+
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // --ui-probe=<program> opens the leftovers pane for a named program. Used for
-        // automated UI screenshots during development.
+        // --ui-probe=<program> opens the leftovers pane for a named program.
+        // --ui-view=<startup|store|settings|activity> opens a specific module.
+        // Both exist for automated UI screenshots.
         string? probe = args
             .FirstOrDefault(a => a.StartsWith("--ui-probe=", StringComparison.OrdinalIgnoreCase))?
+            .Split('=', 2)[1];
+        string? probeView = args
+            .FirstOrDefault(a => a.StartsWith("--ui-view=", StringComparison.OrdinalIgnoreCase))?
             .Split('=', 2)[1];
 
         // Self-elevate so HKLM writes and Program Files deletes are possible.
@@ -40,7 +49,7 @@ internal static class Program
         var theme = SettingsStore.Load().Theme;
         Theme.ApplyMode(theme);
 
-        Application.Run(new MainForm(probe));
+        Application.Run(new MainForm(probe, probeView));
         return 0;
     }
 

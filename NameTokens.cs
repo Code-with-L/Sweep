@@ -31,39 +31,6 @@ public static class NameTokens
         return words;
     }
 
-    /// <summary>
-    /// Whole-word match, plus a compacted-substring match for long tokens so that
-    /// "AdobeAcrobat" is still found from the token "adobe". Substring matching is
-    /// deliberately disabled for short tokens: "ide" would match "Video", "Wide" and "Guide".
-    /// </summary>
-    internal static bool IsMatch(string candidate, string token, int minCompactLength)
-    {
-        if (candidate.Length == 0 || token.Length == 0)
-        {
-            return false;
-        }
-
-        if (candidate.Equals(token, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        foreach (string word in SplitWords(candidate))
-        {
-            if (word.Equals(token, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        if (token.Length < minCompactLength)
-        {
-            return false;
-        }
-
-        string compact = Compact(candidate);
-        return compact.Length > token.Length && compact.Contains(token, StringComparison.OrdinalIgnoreCase);
-    }
     private static readonly HashSet<string> NoiseWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "the", "and", "for", "of", "inc", "inc.", "ltd", "ltd.", "llc", "llp",
@@ -387,6 +354,57 @@ public static class NameTokens
     }
 }
 
+/// <summary>
+/// A candidate name decomposed once.
+///
+/// This exists because the scan calls Match() tens of thousands of times per registry
+/// walk, and the previous implementation re-ran the camelCase regex and rebuilt the
+/// compacted form once per token rather than once per candidate - three to five times the
+/// work for every single directory and key name.
+/// </summary>
+public readonly struct NameMatchContext
+{
+    public NameMatchContext(string candidate)
+    {
+        Candidate = candidate;
+        Words = NameTokens.SplitWords(candidate);
+        Compact = NameTokens.Compact(candidate);
+    }
+
+    public string Candidate { get; }
+    public IReadOnlyList<string> Words { get; }
+    public string Compact { get; }
+
+    public bool Matches(string token, int minCompactLength)
+    {
+        if (Candidate.Length == 0 || token.Length == 0)
+        {
+            return false;
+        }
+
+        if (Candidate.Equals(token, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (string word in Words)
+        {
+            if (word.Equals(token, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (token.Length < minCompactLength)
+        {
+            return false;
+        }
+
+        return Compact.Length > token.Length &&
+               Compact.Contains(token, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
 /// <summary>Strong tokens drive matches; weak tokens (publisher) only match in narrow roots.</summary>
 public sealed record ResidueTokenSet(
     IReadOnlyList<string> Strong,
@@ -399,22 +417,50 @@ public sealed record ResidueTokenSet(
 
     public string? Match(string candidate)
     {
-        foreach (var token in Strong)
+        if (Strong.Count == 0 || candidate.Length == 0)
         {
-            if (NameTokens.IsMatch(candidate, token, MinCompactLength))
-            {
-                return token;
-            }
+            return null;
         }
 
-        return null;
+        var context = new NameMatchContext(candidate);
+        return MatchAny(context, Strong, MinCompactLength);
     }
 
     public string? MatchWeak(string candidate)
     {
-        foreach (var token in Weak)
+        if (Weak.Count == 0 || candidate.Length == 0)
         {
-            if (NameTokens.IsMatch(candidate, token, MinCompactLength + 1))
+            return null;
+        }
+
+        var context = new NameMatchContext(candidate);
+        return MatchAny(context, Weak, MinCompactLength + 1);
+    }
+
+    /// <summary>Cheap reject before the expensive decomposition, for callers in hot loops.</summary>
+    public bool CouldMatch(string candidate)
+    {
+        if (candidate.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var token in Strong)
+        {
+            if (candidate.Contains(token, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? MatchAny(NameMatchContext context, IReadOnlyList<string> tokens, int minCompactLength)
+    {
+        foreach (string token in tokens)
+        {
+            if (context.Matches(token, minCompactLength))
             {
                 return token;
             }

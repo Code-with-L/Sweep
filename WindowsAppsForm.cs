@@ -1,7 +1,7 @@
 namespace Sweep;
 
 /// <summary>Store / MSIX app inventory, which the classic program list cannot see.</summary>
-internal sealed class WindowsAppsForm : Form
+internal sealed class WindowsAppsForm : ThemedForm
 {
     private readonly ListView _list = new() { View = View.Details, FullRowSelect = true, HideSelection = false };
     private readonly ToolStripStatusLabel _status = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -25,6 +25,7 @@ internal sealed class WindowsAppsForm : Form
         ForeColor = p.Text;
 
         Native.EnableDoubleBuffer(_list);
+        Theme.ApplyToList(_list, p);
         _list.Dock = DockStyle.Fill;
         _list.Columns.Add("Name", 260);
         _list.Columns.Add("Version", 90);
@@ -40,8 +41,9 @@ internal sealed class WindowsAppsForm : Form
         _hideFrameworks.CheckedChanged += (_, _) => Populate();
 
         var header = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = p.Surface };
+        _hideFrameworks.ForeColor = p.Text;
         header.Controls.AddRange([searchLabel, _search, _hideFrameworks]);
-        _hideFrameworks.Location = new Point(340, 14);
+        _hideFrameworks.Location = new Point(_search.Right + 16, 14);
 
         var toolbar = new FlowLayoutPanel
         {

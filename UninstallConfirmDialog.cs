@@ -1,7 +1,7 @@
 namespace Sweep;
 
 /// <summary>Confirmation shown before an uninstall is launched.</summary>
-internal sealed class UninstallConfirmDialog : Form
+internal sealed class UninstallConfirmDialog : ThemedForm
 {
     private readonly CheckBox _silent = new() { Text = "Run uninstaller silently where supported", AutoSize = true };
     private readonly CheckBox _restore = new() { Text = "Create a system restore point first", AutoSize = true };

@@ -1,6 +1,6 @@
 namespace Sweep;
 
-internal sealed class ResidueForm : Form
+internal sealed class ResidueForm : ThemedForm
 {
     private readonly InstalledApp _app;
     private readonly ScanOptions _options;

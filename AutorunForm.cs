@@ -26,7 +26,7 @@ public sealed record AutorunItem(
 /// editing registry values, because SCM caches start types and a registry edit appears to
 /// work and then silently reverts. Both changes are reversible.
 /// </summary>
-internal sealed class AutorunForm : Form
+internal sealed class AutorunForm : ThemedForm
 {
     private readonly ListView _list = new()
     {
@@ -60,6 +60,7 @@ internal sealed class AutorunForm : Form
         ForeColor = p.Text;
 
         Native.EnableDoubleBuffer(_list);
+        Theme.ApplyToList(_list, p);
         _list.Dock = DockStyle.Fill;
         _list.Columns.Add("Type", 110);
         _list.Columns.Add("Name", 200);
@@ -74,9 +75,21 @@ internal sealed class AutorunForm : Form
 
         var header = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = p.Surface };
         header.Controls.AddRange([searchLabel, _search, _includeStartup, _includeServices, _includeTasks]);
-        _includeStartup.Location = new Point(306, 14);
-        _includeServices.Location = new Point(400, 14);
-        _includeTasks.Location = new Point(476, 14);
+
+        // AutoSize on a fixed panel overlaps as soon as the system font changes, so the
+        // positions are computed from each control's measured width.
+        int x = _search.Right + 16;
+        _includeStartup.ForeColor = p.Text;
+        header.Controls.Add(_includeStartup);
+        x = LayoutChip(_includeStartup, x);
+
+        _includeServices.ForeColor = p.Text;
+        header.Controls.Add(_includeServices);
+        x = LayoutChip(_includeServices, x);
+
+        _includeTasks.ForeColor = p.Text;
+        header.Controls.Add(_includeTasks);
+        LayoutChip(_includeTasks, x);
 
         _includeStartup.CheckedChanged += (_, _) => Reload();
         _includeServices.CheckedChanged += (_, _) => Reload();
@@ -147,6 +160,16 @@ internal sealed class AutorunForm : Form
     private bool _reloading;
     private int _generation;
 
+    /// <summary>
+    /// Positions a filter chip after the previous one. Fixed pixel offsets overlap as soon
+    /// as the system font or DPI changes.
+    /// </summary>
+    private static int LayoutChip(Control chip, int x)
+    {
+        chip.Location = new Point(x, 14);
+        return x + chip.PreferredSize.Width + 18;
+    }
+
     private async void Reload()
     {
         if (_reloading || !IsHandleCreated)
@@ -179,14 +202,16 @@ internal sealed class AutorunForm : Form
             {
                 foreach (var entry in SystemArtifacts.AllStartupEntries(CancellationToken.None))
                 {
+                    bool isFolderShortcut = entry.Location.SubKey is not { Length: > 0 };
+
                     collected.Add(new AutorunItem(
                         AutorunKind.StartupEntry,
                         entry.Name,
                         entry.Command,
                         "Enabled",
                         entry.Location,
-                        entry.Location.SubKey.Length > 0 ? entry.Name : null,
-                        entry.Source == "Startup folder" ? entry.Command : null));
+                        isFolderShortcut ? null : entry.Name,
+                        isFolderShortcut ? entry.Command : null));
                 }
             }
 

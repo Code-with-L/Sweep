@@ -1,6 +1,6 @@
 namespace Sweep;
 
-internal sealed class SettingsForm : Form
+internal sealed class SettingsForm : ThemedForm
 {
     private readonly AppSettings _settings;
     private readonly CheckBox _silent = new();

@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Sweep;
 
-internal sealed class MainForm : Form
+internal sealed class MainForm : ThemedForm
 {
     private readonly DataGridView _grid = new();
     private readonly TextBox _search = new();
@@ -27,11 +27,13 @@ internal sealed class MainForm : Form
 
     /// <summary>Diagnostic hook: opens the leftovers pane for a named program at startup.</summary>
     private readonly string? _probeApp;
+    private readonly string? _probeView;
     private bool _probeOpened;
 
-    public MainForm(string? probeApp = null)
+    public MainForm(string? probeApp = null, string? probeView = null)
     {
         _probeApp = probeApp;
+        _probeView = probeView;
         _settings = SettingsStore.Load();
 
         Text = "Sweep - App Uninstaller";
@@ -130,6 +132,12 @@ BuildMenu();
 
         _themeDarkItem.Checked = _settings.Theme == ThemeMode.Dark;
         _themeLightItem.Checked = _settings.Theme == ThemeMode.Light;
+
+        // The native title bar is themed through DWM, so it has to be told again.
+        if (IsHandleCreated)
+        {
+            ApplyWindows11Chrome();
+        }
     }
 
     private void BuildMenu()
@@ -723,6 +731,23 @@ var apps = await Task.Run(() => RegistryScanner.Scan());
     /// <summary>Diagnostic hook for automated UI screenshots; runs once the list is loaded.</summary>
     private void RunProbeIfRequested()
     {
+        if (_probeView is not null && !_probeOpened)
+        {
+            _probeOpened = true;
+            BeginInvoke((Action)(() =>
+            {
+                switch (_probeView)
+                {
+                    case "startup": OpenForm<AutorunForm>(); break;
+                    case "store": OpenForm<WindowsAppsForm>(); break;
+                    case "settings": ShowSettings(); break;
+                    case "activity": ShowActivity(); break;
+                    default: LogStore.Warn($"Unknown UI probe view '{_probeView}'."); break;
+                }
+            }));
+            return;
+        }
+
         if (_probeApp is null || _probeOpened)
         {
             return;

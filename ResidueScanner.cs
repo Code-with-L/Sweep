@@ -104,7 +104,6 @@ public sealed class ResidueScanner
     private readonly ScanOptions _options;
     private readonly List<ResidueItem> _results = [];
     private readonly HashSet<string> _seen = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<string> _protected = [];
     private readonly object _sync = new();
     private int _fileMatchCount;
     private int _registryMatchCount;
@@ -113,6 +112,18 @@ public sealed class ResidueScanner
 
     /// <summary>Non-fatal problems that the UI must surface instead of only logging.</summary>
     public IReadOnlyList<string> Warnings => _warnings;
+
+    /// <summary>Wall-clock per phase, so slow scans can be attributed rather than guessed at.</summary>
+    public IReadOnlyDictionary<string, long> PhaseTimings => _timings;
+
+    private readonly Dictionary<string, long> _timings = [];
+
+    private long StartPhase() => System.Diagnostics.Stopwatch.GetTimestamp();
+
+    private void StopPhase(string name, long started)
+    {
+        _timings[name] = System.Diagnostics.Stopwatch.GetTimestamp() - started;
+    }
 
     /// <summary>Hard ceiling on registry keys visited, so a broad token cannot run for hours.</summary>
     private const int MaxRegistryKeysVisited = 250_000;
@@ -163,54 +174,9 @@ public sealed class ResidueScanner
 
         // The user profile root is deliberately NOT scanned. Developers keep repositories and
         // scripts named after tools under their home directory, and matching those would
-        // offer to delete the user's own source code.
+// offer to delete the user's own source code.
 
         return roots;
-    }
-
-    /// <summary>
-    /// Directories owned by Windows or by other applications' sandboxing. Matching inside
-    /// these produces matches we must never offer to delete.
-    /// </summary>
-    private static List<string> ProtectedPrefixes()
-    {
-        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string common = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-
-        return
-        [
-            Path.Combine(local, "Packages"),
-            Path.Combine(local, "Microsoft", "Windows"),
-            Path.Combine(local, "Microsoft", "OneDrive"),
-            Path.Combine(local, "Microsoft", "EdgeUser Data"),
-            Path.Combine(local, "Temp"),
-            Path.Combine(local, "CrashDumps"),
-            Path.Combine(local, "D3DSCache"),
-            Path.Combine(common, "Microsoft"),
-            Path.Combine(common, "Package Cache"),
-            Path.Combine(common, "Windows Defender"),
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            Environment.GetFolderPath(Environment.SpecialFolder.System),
-        ];
-    }
-
-    private bool IsProtected(string path)
-    {
-        if (_protected.Count == 0)
-        {
-            _protected.AddRange(ProtectedPrefixes());
-        }
-
-        foreach (string prefix in _protected)
-        {
-            if (prefix.Length > 0 &&
-                path.StartsWith(prefix + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     public Task<List<ResidueItem>> ScanAsync(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
@@ -224,10 +190,15 @@ private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationTo
     {
         _results.Clear();
         _seen.Clear();
-        _capped = false;
+        lock (_sync)
+        {
+            _capped = false;
+        }
+
         _warnings.Clear();
         _fileMatchCount = 0;
         _registryMatchCount = 0;
+        _timings.Clear();
         _ct = cancellationToken;
 
         if (_tokens.IsEmpty)
@@ -239,13 +210,16 @@ private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationTo
         _deadline = DateTime.UtcNow + TimeSpan.FromSeconds(_options.FileSeconds);
         _registryDeadline = _deadline + TimeSpan.FromSeconds(Math.Max(15, _options.FileSeconds / 2));
 
+        long phase = StartPhase();
         ScanFiles(progress, cancellationToken);
+        StopPhase("files", phase);
 
         // The registry phase must never be skipped because the file phase hit a cap.
         // A truncated file scan is a partial result; skipping the registry entirely
         // would silently hide every registry leftover.
         if (_options.ScanRegistry)
         {
+            phase = StartPhase();
             try
             {
                 ScanRegistry(progress, cancellationToken);
@@ -259,9 +233,15 @@ private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationTo
                 LogStore.Error("Registry residue scan failed", ex);
                 _warnings.Add("The registry scan failed; registry leftovers are missing from this list.");
             }
+            finally
+            {
+                StopPhase("registry", phase);
+            }
         }
 
+        phase = StartPhase();
         ScanArtifacts(progress, cancellationToken);
+        StopPhase("artifacts", phase);
 
         // The original install folder, if it somehow survived, is always worth offering.
         AddSurvivingInstallFolder();
@@ -304,6 +284,14 @@ private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationTo
 
                 if (_seen.Add(item.Path))
                 {
+                    // Registry and system artefacts go through the same shared-key guard as
+                    // filesystem matches.
+                    if (Safety.IsHardBlocked(item))
+                    {
+                        LogStore.Warn($"Guardrail blocked a match at a shared location: {item.Path}");
+                        continue;
+                    }
+
                     if (_registryMatchCount >= _options.MaxRegistryMatches)
                     {
                         _capped = true;
@@ -329,7 +317,7 @@ private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationTo
 
     // ---- Filesystem -----------------------------------------------------
 
-    private void ScanFiles(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
+private void ScanFiles(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
     {
         var roots = FileRoots();
         if (roots.Count == 0)
@@ -342,33 +330,52 @@ private List<ResidueItem> Scan(IProgress<ScanProgress>? progress, CancellationTo
         // would compare as already-expired, silently skipping every size calculation.
         _sizeBudgetDeadline = System.Diagnostics.Stopwatch.GetTimestamp() + StopwatchTicks(20);
 
-        for (int i = 0; i < roots.Count; i++)
+        // The roots are disjoint directory trees, so they can be walked concurrently.
+        // This phase is disk-bound, so it scales with cores rather than with I/O wait.
+        var parallelOptions = new ParallelOptions
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount / 2, 1, 4),
+        };
 
-            var root = roots[i];
-            int percent = (int)(100.0 * i / roots.Count);
-
-            progress?.Report(new ScanProgress(
-                "Files",
-                $"Scanning {root.Label}",
-                _results.Count,
-                percent));
-
-WalkDirectory(
-                root.Path,
-                0,
-                root.Depth,
-                root.AllowWeak && _options.UsePublisherTokens,
-                progress,
-                root.Label);
-
-            if (_capped || DateTime.UtcNow > _deadline)
+        try
+        {
+            Parallel.ForEach(roots, parallelOptions, (root, state) =>
             {
-                LogStore.Warn(
-                    $"File scan stopped early ({(_capped ? "match limit reached" : "time limit reached")}). Results are partial.");
-                break;
-            }
+                progress?.Report(new ScanProgress("Files", $"Scanning {root.Label}", _results.Count, 0));
+
+                WalkDirectory(
+                    root.Path,
+                    0,
+                    root.Depth,
+                    root.AllowWeak && _options.UsePublisherTokens,
+                    progress,
+                    root.Label);
+
+                // Once the global time budget is gone the remaining roots would only burn
+                // time confirming the same thing.
+                if (DateTime.UtcNow > _deadline)
+                {
+                    state.Stop();
+                }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (AggregateException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        if (_capped || DateTime.UtcNow > _deadline)
+        {
+            LogStore.Warn(
+                $"File scan stopped early ({(_capped ? "match limit reached" : "time limit reached")}). Results are partial.");
+            _warnings.Add(_capped
+                ? "The file scan hit its match limit, so some leftovers may be missing."
+                : "The file scan hit its time limit, so some leftovers may be missing.");
         }
     }
 
@@ -432,7 +439,7 @@ private void WalkDirectory(
 
 if (isDirectory)
             {
-                if (IsProtected(entry))
+                if (Safety.IsProtectedLocation(entry))
                 {
                     continue;
                 }
@@ -497,7 +504,7 @@ if (isDirectory)
             return;
         }
 
-        long size = 0;
+long size = 0;
         if (System.Diagnostics.Stopwatch.GetTimestamp() < _sizeBudgetDeadline)
         {
             try
@@ -510,16 +517,19 @@ if (isDirectory)
             }
         }
 
-        _results.Add(new ResidueItem
+        lock (_sync)
         {
-            Kind = ResidueKind.Folder,
-            Path = path,
-            DisplayName = name,
-            SizeBytes = size,
-MatchedToken = match,
-            Target = new FileTarget(path),
-            Confidence = Confidence.Safe,
-        });
+            _results.Add(new ResidueItem
+            {
+                Kind = ResidueKind.Folder,
+                Path = path,
+                DisplayName = name,
+                SizeBytes = size,
+                MatchedToken = match,
+                Target = new FileTarget(path),
+                Confidence = Confidence.Safe,
+            });
+        }
 
         _progress?.Report(new ScanProgress("Files", $"{rootLabel}: {name}", _results.Count, 55));
     }
@@ -574,7 +584,7 @@ MatchedToken = match,
             // routinely a shared location such as "C:\ProgramData\Package Cache\{GUID}"
             // or "C:\Windows\System32", and offering those for deletion would be
             // catastrophic.
-            if (IsProtected(location))
+            if (Safety.IsProtectedLocation(location))
             {
                 LogStore.Warn($"Install location '{location}' is a protected shared location; not offering it for removal.");
                 _warnings.Add($"Install location '{location}' is a shared/protected location and was excluded.");
@@ -611,23 +621,35 @@ MatchedToken = match,
 
 private bool TryReserve(string path, int cap, ref int counter)
     {
-        if (!_seen.Add(path))
+        // The final backstop: nothing pointing at a shared or system location reaches the
+        // user, no matter how confident the name match was.
+        if (Safety.IsProtectedLocation(path))
         {
+            LogStore.Warn($"Guardrail blocked a match at a protected location: {path}");
             return false;
         }
 
-        if (counter >= cap)
+        lock (_sync)
         {
-            if (!_capped)
+            if (!_seen.Add(path))
             {
-                _capped = true;
-                LogStore.Warn($"Match limit of {cap} reached; results are partial.");
+                return false;
             }
 
-            return false;
+            if (counter >= cap)
+            {
+                if (!_capped)
+                {
+                    _capped = true;
+                    LogStore.Warn($"Match limit of {cap} reached; results are partial.");
+                }
+
+                return false;
+            }
+
+            counter++;
         }
 
-        counter++;
         return true;
     }
 
@@ -807,8 +829,17 @@ foreach (string name in names)
 
 private void AddRegistryKey(RegRoot root, string keyPath, string name, string match)
     {
+        var location = new RegLocation(root.Hive, root.View, keyPath);
+
         lock (_sync)
         {
+            // Registry matches go through the same shared-key guard as filesystem matches.
+            if (Safety.IsProtectedRegistryKey(location))
+            {
+                LogStore.Warn($"Guardrail blocked a registry match at a shared location: {keyPath}");
+                return;
+            }
+
             if (_registryMatchCount >= _options.MaxRegistryMatches)
             {
                 _capped = true;
