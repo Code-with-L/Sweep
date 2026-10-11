@@ -254,6 +254,9 @@ private Control BuildToolbar()
         {
             Text = "Search",
             AutoSize = true,
+            // See MakeLabel: AutoSize can measure short of what TextRenderer draws and clip
+            // the final glyph.
+            Padding = new Padding(0, 0, 4, 0),
             ForeColor = Theme.Current.TextDim,
             Margin = new Padding(2, 8, 8, 0),
         };
@@ -353,10 +356,19 @@ private Control BuildToolbar()
         return panel;
     }
 
+    /// <summary>
+    /// A filter caption.
+    ///
+    /// The right padding is deliberate slack. Label.AutoSize measures with GDI but the label
+    /// is drawn with TextRenderer, and the two disagree by a pixel or two on some strings -
+    /// which sliced the colon off "Type:" and the tail off "Size:". Giving the label a few
+    /// pixels it does not strictly need keeps the last glyph whole.
+    /// </summary>
     private static Label MakeLabel(string text) => new()
     {
         Text = text,
         AutoSize = true,
+        Padding = new Padding(0, 0, 4, 0),
         Margin = new Padding(0, 7, 5, 0),
     };
 
