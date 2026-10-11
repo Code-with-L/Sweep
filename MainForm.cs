@@ -121,6 +121,13 @@ BuildMenu();
         Theme.StyleMenu(_menu, p);
         Theme.StyleTextBox(_search, p);
         Theme.ApplyToGrid(_grid, p);
+
+        // The filter dropdowns are owner-drawn, so they have to be restyled on a theme
+        // switch or they keep the colours of whichever palette was current at startup.
+        foreach (var box in new[] { _typeFilter, _sizeFilter, _driveFilter })
+        {
+            Theme.StyleComboBox(box, p);
+        }
         Theme.StyleButton(_uninstallButton, p, primary: true);
         Theme.StyleButton(_scanButton, p);
         _search.BackColor = p.SurfaceAlt;
@@ -323,8 +330,7 @@ private Control BuildToolbar()
 
         foreach (var box in new[] { _typeFilter, _sizeFilter, _driveFilter })
         {
-            box.BackColor = Theme.Current.SurfaceAlt;
-            box.ForeColor = Theme.Current.Text;
+            Theme.StyleComboBox(box, Theme.Current);
             box.Margin = new Padding(0, 1, 10, 0);
             box.SelectedIndexChanged += (_, _) => ApplyFilter();
         }
@@ -1027,9 +1033,9 @@ private void ApplyFilter()
         }
     }
 
-    private readonly ComboBox _typeFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
-    private readonly ComboBox _sizeFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 108 };
-    private readonly ComboBox _driveFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
+    private readonly ThemedComboBox _typeFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
+    private readonly ThemedComboBox _sizeFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 108 };
+    private readonly ThemedComboBox _driveFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
     private readonly Label _countLabel = new() { AutoSize = true };
     private readonly GroupIndex _groups = new() { Enabled = true };
     private bool _recentFirst = true;

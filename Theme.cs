@@ -137,6 +137,69 @@ internal static class Theme
         box.BorderStyle = BorderStyle.FixedSingle;
     }
 
+    /// <summary>
+    /// ComboBox is one of the few controls that ignores BackColor and ForeColor unless it
+    /// draws itself, so the filter dropdowns came up as white boxes with black text against
+    /// a dark window. Owner-drawing is the supported way to make them follow the palette.
+    /// </summary>
+    public static void StyleComboBox(ComboBox box, Palette p)
+    {
+        // DrawMode is sticky, and the handlers capture this palette, so re-theming has to
+        // drop the old subscription rather than stack another one on top of it.
+        box.DrawItem -= OnComboDrawItem;
+        box.DrawItem += OnComboDrawItem;
+
+        box.DrawMode = DrawMode.OwnerDrawFixed;
+        box.BackColor = p.SurfaceAlt;
+        box.ForeColor = p.Text;
+        box.FlatStyle = FlatStyle.Flat;
+
+        if (box is ThemedComboBox themed)
+        {
+            themed.RefreshTheme();
+        }
+    }
+
+    private static void OnComboDrawItem(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not ComboBox box)
+        {
+            return;
+        }
+
+        var p = Theme.Current;
+        bool selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+        bool hovered = (e.State & DrawItemState.ComboBoxEdit) == DrawItemState.ComboBoxEdit;
+
+        using var background = new SolidBrush(selected || hovered ? p.Selection : p.SurfaceAlt);
+
+        // The control relies entirely on this handler for its background, so an empty or
+        // out-of-range index still has to be painted over rather than skipped.
+        e.Graphics.FillRectangle(background, e.Bounds);
+
+        if (e.Index < 0 || e.Index >= box.Items.Count)
+        {
+            return;
+        }
+
+        using var foreground = new SolidBrush(selected || hovered ? p.Text : p.TextDim);
+        using var format = new StringFormat
+        {
+            LineAlignment = StringAlignment.Center,
+            FormatFlags = StringFormatFlags.NoWrap,
+            Trimming = StringTrimming.EllipsisCharacter,
+        };
+
+        string text = box.Items[e.Index]?.ToString() ?? string.Empty;
+        var textArea = new RectangleF(
+            e.Bounds.X + 6,
+            e.Bounds.Y,
+            Math.Max(1, e.Bounds.Width - 6 - SystemInformation.VerticalScrollBarWidth - 4),
+            e.Bounds.Height);
+
+        e.Graphics.DrawString(text, box.Font, foreground, textArea, format);
+    }
+
     /// <summary>Dark-aware renderer for menus and tool strips.</summary>
     public sealed class Renderer : ToolStripProfessionalRenderer
     {

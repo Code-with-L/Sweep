@@ -110,8 +110,7 @@ internal sealed class SettingsForm : ThemedForm
         AddSection("Appearance");
         _theme.Items.AddRange(["Dark", "Light"]);
         _theme.SelectedIndex = settings.Theme == ThemeMode.Dark ? 0 : 1;
-        _theme.BackColor = p.SurfaceAlt;
-        _theme.ForeColor = p.Text;
+        Theme.StyleComboBox(_theme, p);
         var themeLabel = new Label { Text = "Theme", ForeColor = p.Text, AutoSize = true, Anchor = AnchorStyles.Left };
         table.Controls.Add(themeLabel, 0, table.RowCount);
         table.Controls.Add(_theme, 1, table.RowCount);
