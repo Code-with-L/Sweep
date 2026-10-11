@@ -423,7 +423,16 @@ private void RefreshDriveFilter()
             Padding = new Padding(6, 0, 4, 0),
         };
 
-        _grid.Columns.Add(new DataGridViewImageColumn { Name = "icon", Width = 46, Resizable = DataGridViewTriState.False });
+        _grid.Columns.Add(new DataGridViewImageColumn
+        {
+            Name = "icon",
+            Resizable = DataGridViewTriState.False,
+
+            // Left unset, this column's ValueType is null, which is how a null icon ends
+            // up raising FormatException. See the DataError handler below.
+            ValueType = typeof(Image),
+            DefaultCellStyle = iconStyle,
+        });
 
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Application", ToolTipText = "Application", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 200 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "size", HeaderText = "Size", ToolTipText = "Installed size", Width = 92 });
@@ -463,9 +472,8 @@ private void RefreshDriveFilter()
     /// A hardcoded 38 looked right at 100% and clipped descenders at 150%, because the row
     /// scaled with the DPI while the metrics did not.
     ///
-    /// This deliberately does NOT run from the constructor. Resizing a column before the
-    /// grid has been laid out leaves the column header cells holding stale clip rectangles,
-    /// and every column title then renders cut off.
+    /// This runs after the window is laid out rather than from the constructor, so the
+    /// metrics are measured against real geometry instead of a default-sized grid.
     /// </summary>
     private void ApplyRowMetrics()
     {
@@ -482,7 +490,19 @@ private void RefreshDriveFilter()
             iconColumn.Width = iconSize + 12;
         }
 
+        // The Application column uses AutoSizeMode.Fill, so its final width is only decided
+        // once the grid has been laid out. Every column header to its right is then painted
+        // against a rectangle that no longer matches its column, which clips the last glyph
+        // off every title. Re-running layout once the metrics have settled rebuilds those
+        // rectangles against the real widths.
+        _grid.PerformLayout();
         _grid.Invalidate();
+
+        // Same trap for the headers specifically: bounce the height mode so DataGridView
+        // recomputes the header row's cell bounds from the columns' current widths.
+        var headerMode = _grid.ColumnHeadersHeightSizeMode;
+        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.EnableResizing;
+        _grid.ColumnHeadersHeightSizeMode = headerMode;
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)

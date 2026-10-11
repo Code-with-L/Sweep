@@ -76,7 +76,7 @@ internal static class Theme
         grid.ColumnHeadersDefaultCellStyle.ForeColor = p.TextDim;
         grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = p.SurfaceAlt;
         grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = p.TextDim;
-        grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(4, 6, 4, 6);
+        grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 0, 6, 0);
         grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
         grid.EnableHeadersVisualStyles = false;
         grid.RowHeadersVisible = false;

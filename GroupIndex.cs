@@ -5,9 +5,13 @@ namespace Sweep;
 /// present them as one undifferentiated wall.
 ///
 /// "Recently installed" uses the install date when the registry has one, falling back to the
-/// install folder's creation time. Programs with no discoverable date go to the other group
-/// rather than being guessed into the recent one.
-/// </summary>
+    /// install folder's creation time. Programs with no discoverable date go to the other group
+    /// rather than being guessed into the recent one.
+    ///
+    /// Grouping is not just decoration. Selecting a row runs that program's uninstaller, so the
+    /// mapping between grid row and program index has to be exactly right; --selftest --grouping
+    /// asserts it rather than trusting the arithmetic.
+    /// </summary>
 internal sealed class GroupIndex
 {
     internal sealed record Entry(string Label, int Count);
@@ -99,7 +103,7 @@ internal sealed class GroupIndex
         // so each program appears under the heading it belongs to.
         if (recent > 0)
         {
-            _groupsByRow[0] = new Entry($"Recently installed programs ({recent})", recent);
+            _groupsByRow[0] = new Entry($"New programs ({recent})", recent);
             _groupRows.Add(0);
             TotalRows = 1 + recent;
         }
