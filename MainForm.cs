@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Sweep;
@@ -742,6 +744,7 @@ var apps = await Task.Run(() => RegistryScanner.Scan());
                     case "store": OpenForm<WindowsAppsForm>(); break;
                     case "settings": ShowSettings(); break;
                     case "activity": ShowActivity(); break;
+                    case "about": ShowAbout(); break;
                     default: LogStore.Warn($"Unknown UI probe view '{_probeView}'."); break;
                 }
             }));
@@ -1456,15 +1459,41 @@ private void ApplyFilter()
 
     private void ShowAbout()
     {
-        MessageBox.Show(this,
-            $"Sweep {typeof(MainForm).Assembly.GetName().Version}\r\n" +
-            $"Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}\r\n" +
-            $"Architecture: {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}\r\n" +
-            $"OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}\r\n\r\n" +
-            "Lists installed programs, runs their registered uninstaller, then searches for\r\n" +
-            "leftover files and registry entries. Leftovers are moved to a reversible quarantine\r\n" +
-            "folder by default.",
-            "About Sweep", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        var assembly = typeof(MainForm).Assembly;
+        string rawVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                            ?? assembly.GetName().Version?.ToString()
+                            ?? "1.0.0";
+
+        // The SDK appends the commit hash after '+'; only the product version is useful here.
+        string info = rawVersion.Split('+')[0];
+
+        string runtime = RuntimeInformation.FrameworkDescription;
+        string arch = RuntimeInformation.ProcessArchitecture.ToString();
+        string os = RuntimeInformation.OSDescription;
+        bool arm64 = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
+
+        var text = new StringBuilder();
+        text.AppendLine($"Sweep {info}");
+        text.AppendLine();
+        text.AppendLine($"Runtime     {runtime}");
+        text.AppendLine($"Architecture{arch}{(arch == "Arm64" ? "  (native)" : string.Empty)}");
+        text.AppendLine($"OS          {os}");
+        text.AppendLine($"Snap layouts  {(arm64 ? "available" : "not available on this Windows version")}");
+        text.AppendLine($"Elevated    {(Program.IsElevated ? "yes" : "no")}");
+        text.AppendLine();
+        text.AppendLine("Lists installed programs, runs their registered uninstaller,");
+        text.AppendLine("then searches for leftover files, registry entries and system");
+        text.AppendLine("artefacts. Leftovers go to a reversible quarantine folder by");
+        text.AppendLine("default, and a shared deny-list refuses anything that belongs to");
+        text.AppendLine("Windows or to another application.");
+        text.AppendLine();
+        text.AppendLine("Plain C# and WinForms. No third-party packages, no telemetry,");
+        text.AppendLine("no cloud database.");
+        text.AppendLine();
+        text.AppendLine("https://github.com/Code-with-L/Sweep");
+        text.AppendLine("MIT licence");
+
+        MessageBox.Show(this, text.ToString(), "About Sweep", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // ---- Status ---------------------------------------------------------
