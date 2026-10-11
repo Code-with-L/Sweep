@@ -21,9 +21,43 @@ public readonly record struct IconSource(string Path, int Index);
 /// </summary>
 public static class IconProvider
 {
-    private const int IconSize = 32;
+    public const int DefaultIconSize = 32;
 
-    private static readonly ConcurrentDictionary<string, Image?> Cache = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Pixel size icons are rendered at. A fixed 32px looked fine at 100% and clipped at
+    /// 150%, because the row height and the icon size have to grow together with the DPI.
+    /// </summary>
+    public static int IconSize { get; private set; } = DefaultIconSize;
+
+    /// <summary>
+    /// Chooses an icon size for the given DPI. 96 is 32px; 144 is 48px, and so on,
+    /// rounded to a whole multiple so GDI+ scaling does not introduce blur.
+    /// </summary>
+    public static int IconSizeForDpi(int deviceDpi)
+    {
+        if (deviceDpi <= 96)
+        {
+            return 32;
+        }
+
+        int scaled = (int)Math.Round(DefaultIconSize * (deviceDpi / 96.0 / 8.0)) * 8;
+        return Math.Clamp(scaled, 32, 64);
+    }
+
+    /// <summary>Re-targets icon rendering. Discards cached icons, which are the old size.</summary>
+    public static void SetDpi(int deviceDpi)
+    {
+        int size = IconSizeForDpi(deviceDpi);
+        if (size == IconSize)
+        {
+            return;
+        }
+
+        IconSize = size;
+        Clear();
+    }
+
+    public static readonly ConcurrentDictionary<string, Image?> Cache = new(StringComparer.Ordinal);
     private static readonly HashSet<string> InFlight = new(StringComparer.Ordinal);
     private static readonly object Gate = new();
 
@@ -52,9 +86,17 @@ public static class IconProvider
     /// <summary>
     /// Cache-only lookup. Never touches the filesystem, so it is safe to call from
     /// CellValueNeeded on the UI thread.
+    ///
+    /// Never returns null: a DataGridViewImageCell handed a null value raises
+    /// FormatException, and unhandled that aborts the entire grid paint. Until the
+    /// background prefetch lands for a row, it draws this 1x1 transparent stand-in.
     /// </summary>
-    public static Image? Get(InstalledApp app) =>
-        Cache.TryGetValue(app.DisplayName, out Image? cached) ? cached : null;
+    public static readonly Image Placeholder = new Bitmap(1, 1);
+
+    public static Image Get(InstalledApp app) =>
+        Cache.TryGetValue(app.DisplayName, out Image? cached) && cached is not null
+            ? cached
+            : Placeholder;
 
     public static bool IsLoaded(InstalledApp app) => Cache.ContainsKey(app.DisplayName);
 

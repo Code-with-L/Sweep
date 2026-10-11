@@ -87,8 +87,12 @@ public static class LogStore
             {
                 Directory.CreateDirectory(LogDirectory);
 
-                if (_writer is null)
+                // Reopen when the file has gone. Holding the handle open across launches
+                // meant that deleting the log silently sent every later write to a deleted
+                // file, which looks exactly like logging being broken.
+                if (_writer is null || !File.Exists(LogFilePath))
                 {
+                    _writer?.Dispose();
                     _writer = new StreamWriter(
                         new FileStream(LogFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
                         new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))

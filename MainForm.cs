@@ -355,7 +355,7 @@ private Control BuildToolbar()
     };
 
     /// <summary>Rebuilds the drive list once programs have been enumerated.</summary>
-    private void RefreshDriveFilter()
+private void RefreshDriveFilter()
     {
         string selected = _driveFilter.SelectedItem?.ToString() ?? "All";
         _driveFilter.Items.Clear();
@@ -406,26 +406,92 @@ private Control BuildToolbar()
     {
         Native.EnableDoubleBuffer(_grid);
 
-_grid.Dock = DockStyle.Fill;
+        _grid.Dock = DockStyle.Fill;
         _grid.VirtualMode = true;
         _grid.AllowUserToAddRows = false;
         _grid.AllowUserToDeleteRows = false;
         _grid.AllowUserToResizeRows = false;
         _grid.ReadOnly = true;
+        _grid.ShowCellToolTips = true;
 
+        // The cell is sized to the icon and the icon is rendered at the cell's exact
+        // pixel size, so GDI+ draws it 1:1. A fixed 32px icon in a fixed 38px row was
+        // scaled by the grid at higher DPIs and came out squashed and clipped.
+        var iconStyle = new DataGridViewCellStyle
+        {
+            Alignment = DataGridViewContentAlignment.MiddleLeft,
+            Padding = new Padding(6, 0, 4, 0),
+        };
 
         _grid.Columns.Add(new DataGridViewImageColumn { Name = "icon", Width = 46, Resizable = DataGridViewTriState.False });
+
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Application", ToolTipText = "Application", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 200 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "size", HeaderText = "Size", ToolTipText = "Size", Width = 92 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "version", HeaderText = "Version", ToolTipText = "Version", Width = 105 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "arch", HeaderText = "Type", ToolTipText = "32-bit or 64-bit program", Width = 78 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "installed", HeaderText = "Install Date", ToolTipText = "Install Date", Width = 105 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "publisher", HeaderText = "Company", ToolTipText = "Company / Publisher", Width = 165 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "website", HeaderText = "Website", ToolTipText = "Website", Width = 165 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "size", HeaderText = "Size", ToolTipText = "Installed size", Width = 92 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "version", HeaderText = "Version", ToolTipText = "Version", Width = 118 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "arch", HeaderText = "Type", ToolTipText = "32-bit or 64-bit program", Width = 76 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "installed", HeaderText = "Install Date", ToolTipText = "Install Date", Width = 104 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "publisher", HeaderText = "Company", ToolTipText = "Company / Publisher", Width = 170 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "website", HeaderText = "Website", ToolTipText = "Website", Width = 150 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "comment", HeaderText = "Comment", ToolTipText = "Comment", Width = 150 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "uninstall", HeaderText = "Uninstall String", ToolTipText = "Registered uninstall command", Width = 240, Visible = false });
 
         _grid.CellValueNeeded += OnCellValueNeeded;
+        _grid.CellFormatting += OnCellFormatting;
+
+        // Without this, one bad cell value silently blanks the entire grid instead of
+        // reporting which cell was wrong. That is exactly how the list came up empty:
+        // a null icon raised FormatException, WinForms rethrew it out of the paint,
+        // and not one row drew.
+        _grid.DataError += (_, e) =>
+        {
+            string column = e.ColumnIndex >= 0 && e.ColumnIndex < _grid.Columns.Count
+                ? _grid.Columns[e.ColumnIndex].Name
+                : "?";
+
+            LogStore.Error(
+                $"DataGridView data error at row={e.RowIndex} col={e.ColumnIndex} column={column}: " +
+                $"{e.Exception?.GetType().Name}: {e.Exception?.Message}");
+            e.ThrowException = false;
+        };
+
         _grid.ColumnHeaderMouseClick += (_, e) => OnColumnHeaderClick(e.ColumnIndex);
+    }
+
+    /// <summary>
+    /// Row height and icon column width follow the DPI.
+    ///
+    /// A hardcoded 38 looked right at 100% and clipped descenders at 150%, because the row
+    /// scaled with the DPI while the metrics did not.
+    ///
+    /// This deliberately does NOT run from the constructor. Resizing a column before the
+    /// grid has been laid out leaves the column header cells holding stale clip rectangles,
+    /// and every column title then renders cut off.
+    /// </summary>
+    private void ApplyRowMetrics()
+    {
+        IconProvider.SetDpi(DeviceDpi);
+
+        int iconSize = IconProvider.IconSize;
+        int textHeight = (int)Math.Ceiling(_grid.Font.Height * 1.7);
+        int height = Math.Max(iconSize, textHeight) + 10;
+
+        _grid.RowTemplate.Height = height;
+
+        if (_grid.Columns["icon"] is { } iconColumn)
+        {
+            iconColumn.Width = iconSize + 12;
+        }
+
+        _grid.Invalidate();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        ApplyRowMetrics();
+        IconProvider.Clear();
+        PrefetchIcons();
+        ApplyWindows11Chrome();
     }
 
     private void OnColumnHeaderClick(int columnIndex)
@@ -461,30 +527,70 @@ _grid.Dock = DockStyle.Fill;
         ApplyFilter();
     }
 
-    private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
+private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
     {
-        if (e.RowIndex < 0 || e.RowIndex >= _filtered.Count)
+        // A group row occupies a slot in the same row index space.
+        if (_groups.IsGroupRow(e.RowIndex))
+        {
+            e.Value = e.ColumnIndex switch
+            {
+                0 => IconProvider.Placeholder,
+                1 => _groups.GroupLabel(e.RowIndex),
+                _ => null,
+            };
+
+            return;
+        }
+
+        int dataRow = _groups.DataRowFor(e.RowIndex);
+        if (dataRow < 0 || dataRow >= _filtered.Count)
         {
             return;
         }
 
-var app = _filtered[e.RowIndex];
+        var app = _filtered[dataRow];
         string column = _grid.Columns[e.ColumnIndex].Name;
 
         e.Value = column switch
         {
             "icon" => IconProvider.Get(app),
             "name" => app.DisplayName,
-            "version" => string.IsNullOrEmpty(app.DisplayVersion) ? "-" : app.DisplayVersion,
+            "version" => Dash(app.VersionDisplay),
             "arch" => app.Architecture,
-            "publisher" => string.IsNullOrEmpty(app.Publisher) ? "-" : app.Publisher,
-            "size" => string.IsNullOrEmpty(app.SizeDisplay) ? "-" : app.SizeDisplay,
-            "installed" => app.InstallDate?.ToString("dd/MM/yyyy") ?? "-",
-            "website" => string.IsNullOrEmpty(app.WebsiteDisplay) ? "-" : app.WebsiteDisplay,
-            "comment" => string.IsNullOrEmpty(app.Comments) ? "-" : app.Comments,
+            "publisher" => Dash(app.Company),
+            "size" => Dash(app.SizeText),
+            "installed" => app.InstallDateDisplay?.ToString("dd/MM/yyyy") ?? "-",
+            "website" => Dash(app.WebsiteDisplay),
+            "comment" => Dash(app.CommentDisplay),
+            "uninstall" => Dash(app.UninstallString),
             _ => null,
         };
     }
+
+    private static string Dash(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value;
+
+    /// <summary>Styles the group header rows so they read as headers, not as programs.</summary>
+    private void OnCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0 || !_groups.IsGroupRow(e.RowIndex))
+        {
+            return;
+        }
+
+        var p = Theme.Current;
+        e.CellStyle.BackColor = p.SurfaceAlt;
+        e.CellStyle.ForeColor = p.Accent;
+        e.CellStyle.Font = _groupFont ??= new Font(_grid.Font, FontStyle.Bold);
+        e.CellStyle.SelectionBackColor = p.SurfaceAlt;
+        e.CellStyle.SelectionForeColor = p.Accent;
+    }
+
+    /// <summary>
+    /// Built once and reused. Allocating a Font inside CellFormatting runs it for every
+    /// group cell on every repaint, and each one is a GDI handle that nobody disposes.
+    /// </summary>
+    private Font? _groupFont;
 
     private void BuildContextMenu()
     {
@@ -705,7 +811,11 @@ var app = _filtered[e.RowIndex];
 
         try
         {
-var apps = await Task.Run(() => RegistryScanner.Scan());
+            // First thing after the window is laid out, so the row height and icon column
+            // width are applied against real geometry.
+            ApplyRowMetrics();
+
+            var apps = await Task.Run(() => RegistryScanner.Scan());
             _all = apps;
             IconProvider.Clear();
             RefreshDriveFilter();
@@ -820,11 +930,42 @@ private void ApplyFilter()
 
         _filtered = Sort(results).ToList();
 
-        _grid.RowCount = _filtered.Count;
+        _groups.Rebuild(_filtered, _recentFirst, _recentWindowDays);
 
-        if (_filtered.Count > 0)
+        // Grouping does not just add header rows, it reorders the list so each program sits
+        // under the heading it belongs to. The grid reads _filtered by data index, so it has
+        // to adopt the grouped order or the headers would lie about their contents.
+        if (_groups.OrdersApps)
         {
-            _grid.CurrentCell = _grid.Rows[0].Cells["name"];
+            _filtered = _groups.Ordered.ToList();
+        }
+
+        _grid.RowCount = _groups.TotalRows;
+
+        // Deliberately NOT setting _grid.CurrentCell here synchronously. Doing so re-enters
+        // SelectionChanged -> UpdateSelection -> SelectedApp -> _grid.CurrentCell while the
+        // setter is still on the stack, which deadlocks the grid on every filter change.
+        // Posting it lets the current event finish first, and leaves the grid with a
+        // current cell so the header region lays out its cells properly.
+        int firstDataRow = _groups.GridRowFor(0);
+        if (_filtered.Count > 0 && firstDataRow < _grid.RowCount)
+        {
+            BeginInvoke((Action)(() =>
+            {
+                try
+                {
+                    _grid.CurrentCell = _grid.Rows[firstDataRow].Cells["name"];
+                    _grid.ClearSelection();
+                }
+                catch (InvalidOperationException)
+                {
+                    // Grid was re-filtered or closed before the post ran.
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // Row count changed underneath us.
+                }
+            }));
         }
 
         _countLabel.Text = _filtered.Count == _all.Count
@@ -870,14 +1011,20 @@ private void ApplyFilter()
     private readonly ComboBox _sizeFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 108 };
     private readonly ComboBox _driveFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
     private readonly Label _countLabel = new() { AutoSize = true };
+    private readonly GroupIndex _groups = new() { Enabled = true };
+    private bool _recentFirst = true;
+    private int _recentWindowDays = 30;
     private string _sortColumn = "name";
     private bool _sortAscending = true;
 
     private CancellationTokenSource? _iconCts;
 
     /// <summary>
-    /// Icons are extracted off the UI thread. CellValueNeeded then only ever performs a
-    /// dictionary lookup, so scrolling and repainting never touch the filesystem.
+    /// Enriches the visible rows off the UI thread: icons and, where the registry has no
+    /// estimate, the on-disk size.
+    ///
+    /// Both used to run inside CellValueNeeded, which is a UI-thread callback. Reading a
+    /// PE header and walking an install folder there froze the window on every repaint.
     /// </summary>
     private void PrefetchIcons()
     {
@@ -890,30 +1037,68 @@ private void ApplyFilter()
 
         _ = Task.Run(() =>
         {
-            try
+try
             {
                 IconProvider.Prefetch(snapshot, token);
+
+                // Resolving metadata the registry lacks means touching the disk: the install
+                // folder size, its creation date, the binary's company and version. All of
+                // it is far too slow for the UI thread, which is why the grid's cell callback
+                // only ever reads cache.
+                var budget = TimeSpan.FromSeconds(20);
+                var perItem = TimeSpan.FromMilliseconds(
+                    Math.Clamp(budget.TotalMilliseconds / Math.Max(1, snapshot.Count), 40, 2000));
+
+                for (int i = 0; i < snapshot.Count && !token.IsCancellationRequested; i++)
+                {
+                    snapshot[i].EnsureMetadataResolved(perItem, token);
+
+                    // Repainting the whole grid per row wastes GDI work.
+                    if (i % 40 == 0)
+                    {
+                        RepaintGrid(token);
+                    }
+                }
             }
             catch (Exception ex)
             {
-                LogStore.Warn($"Icon prefetch stopped: {ex.Message}");
+                LogStore.Warn($"Row enrichment stopped: {ex.Message}");
                 return;
             }
 
-            if (token.IsCancellationRequested || IsDisposed)
-            {
-                return;
-            }
-
-            try
-            {
-                BeginInvoke((Action)(() => _grid.Invalidate()));
-            }
-            catch (ObjectDisposedException)
-            {
-                // Window closed mid-prefetch.
-            }
+            RepaintGrid(token);
         }, token);
+    }
+
+    private void RepaintGrid(CancellationToken token)
+    {
+        if (token.IsCancellationRequested || IsDisposed || !IsHandleCreated)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke((Action)(() =>
+            {
+                try
+                {
+                    _grid.Invalidate();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Window closed mid-enrichment.
+                }
+            }));
+        }
+        catch (ObjectDisposedException)
+        {
+            // Window closed.
+        }
+        catch (InvalidOperationException)
+        {
+            // Handle destroyed.
+        }
     }
 
     private static bool Contains(string? value, string query) =>
@@ -921,8 +1106,14 @@ private void ApplyFilter()
 
     private InstalledApp? SelectedApp()
     {
-        int index = _grid.CurrentCell?.RowIndex ?? -1;
-        return index >= 0 && index < _filtered.Count ? _filtered[index] : null;
+        int row = _grid.CurrentCell?.RowIndex ?? -1;
+        if (row < 0)
+        {
+            return null;
+        }
+
+        int dataRow = _groups.DataRowFor(row);
+        return dataRow >= 0 && dataRow < _filtered.Count ? _filtered[dataRow] : null;
     }
 
     private void UpdateSelection()
