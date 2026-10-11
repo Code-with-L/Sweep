@@ -39,6 +39,11 @@ internal static class SelfTest
                 return DumpAutorun();
             }
 
+            if (args.Contains("--guardrails", StringComparer.OrdinalIgnoreCase))
+            {
+                return DumpGuardrails();
+            }
+
             if (args.Contains("--storeapps", StringComparer.OrdinalIgnoreCase))
             {
                 return DumpStoreApps();
@@ -171,6 +176,63 @@ internal static class SelfTest
             Console.Error.WriteLine($"SELFTEST FAILED: {ex}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Asserts the safety deny-list still refuses what it must and permits what it must.
+    /// The guardrail is the last thing standing between a name-matching mistake and a
+    /// broken machine, so it gets an explicit test rather than implicit coverage.
+    /// </summary>
+    private static int DumpGuardrails()
+    {
+        string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        (string Path, bool ShouldBlock, string Why)[] cases =
+        [
+            (@"C:\", true, "drive root"),
+            (windows, true, "Windows directory itself"),
+            (Path.Combine(windows, "System32"), true, "System32"),
+            (Path.Combine(windows, "System32", "drivers"), true, "nested under System32"),
+            (Path.Combine(programData, "Microsoft"), true, "ProgramData\\Microsoft is shared OS state"),
+            (Path.Combine(programData, "Package Cache"), true, "MSI repair cache"),
+            (Path.Combine(local, "Packages"), true, "Store app sandbox"),
+            (profile, true, "user profile root"),
+            (@"C:\Program Files", true, "Program Files itself"),
+            (@"C:\Program Files (x86)", true, "Program Files (x86) itself"),
+            (Path.Combine(programData, "Microsoft", "Windows", "Start Menu"), true, "Start Menu root is shared"),
+            
+            // Must be permitted: these are ordinary per-application leftovers.
+            (@"C:\Program Files\Some App", false, "an app's own folder in Program Files"),
+            (@"C:\Program Files\Some App\bin", false, "nested under an app folder"),
+            (@"C:\ProgramData\Some Vendor", false, "a vendor folder in ProgramData"),
+            (Path.Combine(profile, "AppData", "Local", "SomeApp"), false, "AppData Local"),
+            (Path.Combine(profile, "AppData", "Roaming", "SomeApp"), false, "AppData Roaming"),
+            (Path.Combine(programData, "Microsoft", "Windows", "Start Menu", "Programs", "SomeApp"),
+                false, "per-app Start Menu shortcut folder"),
+            (Path.Combine(local, "SomeApp", "cache.dat"), false, "a file inside an app folder"),
+        ];
+
+        int failed = 0;
+        Console.WriteLine("== Safety guardrail assertions ==");
+
+        foreach (var (path, shouldBlock, why) in cases)
+        {
+            bool blocked = Safety.IsProtectedLocation(path);
+            bool ok = blocked == shouldBlock;
+            if (!ok)
+            {
+                failed++;
+            }
+
+            Console.WriteLine("  " + (ok ? "PASS" : "FAIL") + "  " + (blocked ? "blocked" : "allowed").PadRight(8) + "  " + Trim(path, 62).PadRight(62) + "  " + why);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(failed == 0 ? "GUARDRAIL TESTS PASSED" : $"GUARDRAIL TESTS FAILED: {failed}");
+        return failed == 0 ? 0 : 5;
     }
 
     /// <summary>Exercises the startup/autorun enumerators that back the Startup entries view.</summary>

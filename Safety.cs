@@ -131,6 +131,25 @@ public static class Safety
 
     public static IReadOnlyList<string> SharedRootsCache => _sharedRoots ??= SharedRoots();
 
+/// <summary>
+    /// Per-application subtrees that legitimately live inside otherwise-protected roots.
+    ///
+    /// The Start Menu is shared: "C:\ProgramData\Microsoft\Windows\Start Menu" holds every
+    /// installed program's shortcuts. Refusing the whole "ProgramData\Microsoft" tree would
+    /// therefore hide one of the most common kinds of leftover there is. Only the root of
+    /// the Start Menu is shared; the per-program folders beneath it are not.
+    /// </summary>
+    private static List<string> AllowedSubtrees() =>
+    [
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Microsoft", "Windows", "Start Menu", "Programs"),
+    ];
+
+    public static IReadOnlyList<string> AllowedCache => _allowed ??= AllowedSubtrees();
+
+    private static List<string>? _allowed;
+
     /// <summary>
     /// True when the path must never be removed automatically.
     ///
@@ -142,6 +161,7 @@ public static class Safety
     {
         _systemRoots ??= SystemRoots();
         _sharedRoots ??= SharedRoots();
+        _allowed ??= AllowedSubtrees();
 
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -156,6 +176,15 @@ public static class Safety
         catch
         {
             return true;
+        }
+
+        // An explicit carve-out wins: this subtree is per-application despite its address.
+        foreach (string allowed in _allowed)
+        {
+            if (full.StartsWith(allowed + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                return IsSharedRootItself(full) || EndsWithProtectedName(full);
+            }
         }
 
         // Everything under a system root, and the system root itself.
@@ -177,6 +206,36 @@ public static class Safety
             }
         }
 
+        return EndsWithProtectedName(full) || IsDriveRoot(full);
+    }
+
+    private static bool IsSharedRootItself(string full) =>
+        (_sharedRoots ??= SharedRoots())
+            .Any(root => string.Equals(full, root, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsDriveRoot(string full)
+    {
+        // A drive root such as C:\ is never a leftover.
+        if (full.Length <= 3)
+        {
+            return true;
+        }
+
+        string leaf;
+        try
+        {
+            leaf = Path.GetFileName(full);
+        }
+        catch
+        {
+            return true;
+        }
+
+        return ProtectedFileNames.Contains(leaf, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool EndsWithProtectedName(string full)
+    {
         foreach (string name in ProtectedFolderNames)
         {
             if (full.EndsWith("\\" + name, StringComparison.OrdinalIgnoreCase))
@@ -195,13 +254,7 @@ public static class Safety
             return true;
         }
 
-        if (ProtectedFileNames.Contains(leaf, StringComparer.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        // A drive root such as C:\ is never a leftover.
-        return full.Length <= 3;
+        return ProtectedFileNames.Contains(leaf, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>Registry locations shared by many applications.</summary>
