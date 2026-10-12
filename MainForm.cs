@@ -1074,6 +1074,21 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
             panel.Visible = true;
             BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
         }
+        else if (key == "hunter")
+        {
+            var panel = new HunterPanel();
+            panel.SetNavigator(ShowModule);
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
+        else if (key == "uninstallhistory")
+        {
+            _modules[key] = new HistoryPanel();
+            _moduleHost.Controls.Add(_modules[key]);
+            _modules[key].Visible = true;
+        }
         else if (_modules.TryGetValue(key, out Control? module))
         {
             module.Visible = true;
@@ -1620,6 +1635,20 @@ try
         }
 
         LogStore.Info($"\"{app.DisplayName}\" uninstaller exited with code {outcome.ExitCode}.");
+
+        // Recorded before the leftover scan, which is a separate step the user may decline.
+        // Uninstall History is the answer to "what did that removal actually do", so the
+        // uninstaller's own outcome belongs there whether or not a scan followed it.
+        UninstallHistory.Record(new UninstallRecord(
+            app.DisplayName,
+            "Uninstall",
+            DateTime.UtcNow,
+            outcome.ExitCode,
+            Array.Empty<string>(),
+            outcome.ExitCode == 0
+                ? Array.Empty<string>()
+                : new[] { $"uninstaller exited with code {outcome.ExitCode}" }));
+
         RememberLastUninstalled(app);
 
         if (outcome.ExitCode == 0)

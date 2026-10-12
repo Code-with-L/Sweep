@@ -88,11 +88,91 @@ internal static class Theme
         grid.RowTemplate.Height = 38;
     }
 
+/// <summary>
+    /// Applies the palette to a ListView, including its column header.
+    ///
+    /// The header is the part that will not follow BackColor on its own: Windows draws it, so
+    /// it came out as a white bar against a dark window. Owner-drawing is what makes the whole
+    /// control match.
+    /// </summary>
     public static void ApplyToList(ListView list, Palette p)
     {
         list.BackColor = p.Surface;
         list.ForeColor = p.Text;
-        list.BorderStyle = BorderStyle.None;
+
+        list.DrawItem -= OnListDrawItem;
+        list.DrawSubItem -= OnListDrawSubItem;
+        list.DrawColumnHeader -= OnListDrawHeader;
+        list.DrawItem += OnListDrawItem;
+        list.DrawSubItem += OnListDrawSubItem;
+        list.DrawColumnHeader += OnListDrawHeader;
+        list.OwnerDraw = true;
+    }
+
+    private static void OnListDrawHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
+    {
+        if (sender is not ListView list)
+        {
+            return;
+        }
+
+        var p = Current;
+
+        // The strip past the final column never raises a header event, so the last column's
+        // fill is extended across it. Left alone that gap stayed white against a dark window.
+        Rectangle bounds = e.Bounds;
+        if (e.ColumnIndex >= 0 && e.ColumnIndex >= list.Columns.Count - 1)
+        {
+            bounds = new Rectangle(
+                bounds.Left,
+                bounds.Top,
+                Math.Max(bounds.Width, list.ClientSize.Width - bounds.Left),
+                bounds.Height);
+        }
+
+        using var back = new SolidBrush(p.SurfaceAlt);
+        using var border = new Pen(p.Border);
+        using var text = new SolidBrush(p.TextDim);
+        using var format = new StringFormat(StringFormat.GenericTypographic)
+        {
+            LineAlignment = StringAlignment.Center,
+            FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.LineLimit,
+        };
+
+        e.Graphics.FillRectangle(back, bounds);
+        e.Graphics.DrawLine(border, bounds.Right - 1, bounds.Top, bounds.Right - 1, bounds.Bottom);
+
+        var area = new RectangleF(bounds.X + 6, bounds.Y, Math.Max(1, bounds.Width - 10), bounds.Height);
+        e.Graphics.DrawString(e.Header?.Text ?? string.Empty, list.Font, text, area, format);
+    }
+
+    private static void OnListDrawItem(object? sender, DrawListViewItemEventArgs e)
+    {
+        var p = Current;
+
+        using var back = new SolidBrush(e.Item?.Selected == true ? p.Selection : p.Surface);
+        e.Graphics.FillRectangle(back, e.Bounds);
+    }
+
+private static void OnListDrawSubItem(object? sender, DrawListViewSubItemEventArgs e)
+    {
+        if (sender is not ListView list || e.Item is null)
+        {
+            return;
+        }
+
+        var p = Current;
+        bool selected = e.Item.Selected;
+
+        using var text = new SolidBrush(p.Text);
+        using var format = new StringFormat(StringFormat.GenericTypographic)
+        {
+            LineAlignment = StringAlignment.Center,
+            FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.LineLimit,
+        };
+
+        var area = new RectangleF(e.Bounds.X + 4, e.Bounds.Y, Math.Max(1, e.Bounds.Width - 8), e.Bounds.Height);
+        e.Graphics.DrawString(e.SubItem?.Text ?? string.Empty, list.Font, text, area, format);
     }
 
     public static void ApplyToTree(TreeView tree, Palette p)

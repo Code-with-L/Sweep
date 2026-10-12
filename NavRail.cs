@@ -33,7 +33,7 @@ internal sealed class NavRail : Panel
         BackColor = Theme.Current.Surface;
         Padding = new Padding(0, 8, 0, 8);
 
-        foreach (NavItem item in AllItems())
+        foreach (NavItem item in AllItems().Concat(HistoryItem()))
         {
             _items[item.Key] = item;
         }
@@ -94,7 +94,7 @@ internal sealed class NavRail : Panel
             Font = new Font(Font, FontStyle.Bold),
         });
 
-        foreach (NavItem item in AllItems().Where(i => i.Group == "Tools"))
+        foreach (NavItem item in AllItems().Concat(HistoryItem()).Where(i => i.Group == "Tools"))
         {
             _list.Controls.Add(MakeButton(item));
         }
@@ -222,5 +222,17 @@ internal sealed class NavRail : Panel
             "Clears browsing history, cookies, caches, form and download history per browser, plus Windows recent items and Office document history."),
         new("backup", "Backup Manager", "Tools",
             "Registry and file backups taken before removals, with the ability to put any of them back exactly as they were."),
+    ];
+
+    /// <summary>
+    /// Modules that are not part of the rail's two groups but still open from it.
+    ///
+    /// History belongs with the Uninstaller group conceptually but is a record of what it did
+    /// rather than a list of programs, so it sits under Tools in reading order.
+    /// </summary>
+    internal static IEnumerable<NavItem> HistoryItem() =>
+    [
+        new("uninstallhistory", "Uninstall History", "Tools",
+            "Every removal this copy of Sweep has performed, grouped by date, listing what was removed and what could not be. Exportable as text."),
     ];
 }
