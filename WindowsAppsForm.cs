@@ -41,7 +41,7 @@ public WindowsAppsPanel()
         _hideFrameworks.Checked = true;
         _hideFrameworks.CheckedChanged += (_, _) => Populate();
 
-        var header = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = p.Surface };
+        var header = new Panel { Dock = DockStyle.Top, Height = 50, BackColor = p.Surface };
         _hideFrameworks.ForeColor = p.Text;
         header.Controls.AddRange([searchLabel, _search, _hideFrameworks]);
         _hideFrameworks.Location = new Point(_search.Right + 16, 14);
@@ -49,9 +49,9 @@ public WindowsAppsPanel()
         var toolbar = new FlowLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            Height = 54,
+            Height = 58,
             FlowDirection = FlowDirection.RightToLeft,
-            Padding = new Padding(0, 10, 14, 10),
+            Padding = new Padding(0, 11, 14, 11),
             BackColor = p.Surface,
         };
 
@@ -62,8 +62,11 @@ public WindowsAppsPanel()
         _refreshButton.Text = "Refresh";
         _refreshButton.Click += async (_, _) => await LoadAsync();
 
+        _removeButton.Height = 34;
+        _refreshButton.Height = 34;
         Theme.StyleButton(_removeButton, p, primary: true);
         Theme.StyleButton(_refreshButton, p);
+        _refreshButton.Height = 34;
         Theme.StyleTextBox(_search, p);
         toolbar.Controls.Add(_removeButton);
         toolbar.Controls.Add(_refreshButton);
@@ -75,9 +78,9 @@ public WindowsAppsPanel()
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.Controls.Add(header, 0, 0);
         root.Controls.Add(_list, 0, 1);

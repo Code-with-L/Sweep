@@ -79,7 +79,7 @@ internal sealed class AutorunPanel : Panel
         _search.TextChanged += (_, _) => Populate();
         Theme.StyleTextBox(_search, p);
 
-        var header = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = p.Surface };
+        var header = new Panel { Dock = DockStyle.Top, Height = 50, BackColor = p.Surface };
         header.Controls.AddRange([searchLabel, _search, _includeStartup, _includeServices, _includeTasks]);
 
         // AutoSize on a fixed panel overlaps as soon as the system font changes, so the
@@ -104,9 +104,9 @@ internal sealed class AutorunPanel : Panel
         var toolbar = new FlowLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            Height = 54,
+            Height = 58,
             FlowDirection = FlowDirection.RightToLeft,
-            Padding = new Padding(0, 10, 14, 10),
+            Padding = new Padding(0, 11, 14, 11),
             BackColor = p.Surface,
         };
 
@@ -126,6 +126,7 @@ internal sealed class AutorunPanel : Panel
         
         _refreshButton.Click += async (_, _) => await LoadAsync();
 
+        foreach (Button b in new[] { _disableButton, _enableButton, _openButton, _refreshButton }) { b.Height = 34; }
         Theme.StyleButton(_disableButton, p, primary: true);
         Theme.StyleButton(_enableButton, p);
         Theme.StyleButton(_openButton, p);
@@ -146,9 +147,9 @@ internal sealed class AutorunPanel : Panel
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.Controls.Add(header, 0, 0);
         root.Controls.Add(_list, 0, 1);

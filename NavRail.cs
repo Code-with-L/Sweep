@@ -32,7 +32,7 @@ internal sealed class NavRail : Panel
         Width = RailWidth;
         Dock = DockStyle.Left;
         BackColor = Theme.Current.Surface;
-        Padding = new Padding(0, 8, 0, 8);
+        Padding = new Padding(0, 10, 0, 8);
 
         foreach (NavItem item in AllItems().Concat(HistoryItem()))
         {
@@ -42,9 +42,12 @@ internal sealed class NavRail : Panel
         _search = new TextBox
         {
             Dock = DockStyle.Top,
-            Height = 30,
-            Margin = new Padding(10, 0, 10, 8),
-            PlaceholderText = "Search",
+
+            // 34 rather than 30. At 30 the text box's own text rectangle came up a pixel or
+            // two short and the placeholder was sliced along the bottom.
+            Height = 34,
+            Margin = new Padding(10, 0, 10, 10),
+            PlaceholderText = "Search modules",
             BorderStyle = BorderStyle.FixedSingle,
         };
         Theme.StyleTextBox(_search, Theme.Current);

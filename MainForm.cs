@@ -488,34 +488,36 @@ private void RefreshDriveFilter()
     }
 
     /// <summary>
-    /// Height of the selection bar. The table row and the panel itself both take this value.
+/// Height of the selection bar. The table row and the panel itself both take this value.
     /// They used to be two separate literals, and when only one of them grew the panel was
-    /// clipped to the row - which cut the bottom off the Activity log button.
+    /// clipped to the row.
+    ///
+    /// 56 rather than 48: at 48 the button's text rectangle came up short and sliced the
+    /// descender off the "g" in "Activity log". The extra room is not decoration - it is the
+    /// font's line box plus its descent.
     /// </summary>
-    private const int BottomBarHeight = 48;
+    private const int BottomBarHeight = 56;
 
     private Panel BuildBottomBar()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 8) };
+        var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 10) };
         panel.BackColor = Theme.Current.Surface;
 
         _selectionInfo.AutoSize = false;
         _selectionInfo.Dock = DockStyle.Fill;
         _selectionInfo.TextAlign = ContentAlignment.MiddleLeft;
 
-        // Fixed and generous. Measured against this font the caption needs ~84px, and the button is
-// given 160 - but see the note in Theme.SizeToText: MeasureText under-reports what a Button
-// draws, so the slack is deliberate rather than calculated.
-var activity = new Button
+        var activity = new Button
         {
             Text = "Activity log",
             Dock = DockStyle.Right,
             AutoSize = false,
-            Width = 160,
-            Height = 32,
+            Width = 150,
+            Height = 36,
         };
         Theme.StyleButton(activity, Theme.Current);
-        activity.Width = 160;
+        activity.Width = 150;
+        activity.Height = 36;
         activity.Click += (_, _) => ShowActivity();
 
         panel.Controls.Add(_selectionInfo);
