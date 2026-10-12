@@ -23,6 +23,27 @@ public sealed class AppSettings
     public int RegistryScanDepth { get; set; } = 3;
     public ThemeMode Theme { get; set; } = ThemeMode.Dark;
     public bool MinimizeToTray { get; set; }
+
+    /// <summary>
+    /// User-supplied entries for the Windows Tools module, kept alongside the built-ins so a
+    /// custom command survives a restart. Keys are tool names.
+    /// </summary>
+    public Dictionary<string, CustomTool> CustomTools { get; set; } = new(StringComparer.Ordinal);
+
+    public bool ShowCheckBoxes { get; set; }
+    public bool ShowSystemComponents { get; set; }
+    public bool ShowSystemUpdates { get; set; }
+    public bool CheckAllLeftoversByDefault { get; set; } = true;
+    public bool MaximizeLeftoversWindow { get; set; }
+    public bool TraceOnStartup { get; set; }
+    public int RecentDays { get; set; } = 30;
+}
+
+/// <summary>A user-added Windows Tool.</summary>
+public sealed class CustomTool
+{
+    public string Command { get; set; } = string.Empty;
+    public string Category { get; set; } = "Custom";
 }
 
 internal static class SettingsStore
@@ -114,5 +135,28 @@ internal static class SettingsStore
         s.FileScanSeconds = Math.Clamp(s.FileScanSeconds, 10, 600);
         s.MaxFileMatches = Math.Clamp(s.MaxFileMatches, 50, 20000);
         s.MaxRegistryMatches = Math.Clamp(s.MaxRegistryMatches, 20, 5000);
+        s.RecentDays = Math.Clamp(s.RecentDays, 1, 365);
     }
+
+    /// <summary>Records a user-added Windows Tool so it survives a restart.</summary>
+    public static void AddCustomTool(string name, string command, string category)
+    {
+        lock (Gate)
+        {
+            _current.CustomTools[name] = new CustomTool { Command = command, Category = category };
+            Save(_current);
+        }
+    }
+
+    public static void RemoveCustomTool(string name)
+    {
+        lock (Gate)
+        {
+            _current.CustomTools.Remove(name);
+            Save(_current);
+        }
+    }
+
+    public static bool IsCustomTool(string name) =>
+        _current.CustomTools.ContainsKey(name);
 }

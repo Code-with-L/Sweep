@@ -55,6 +55,8 @@ internal sealed class MainForm : ThemedForm
 
 BuildMenu();
         var toolbar = BuildToolbar();
+        var toolToolbar = BuildToolToolbar();
+        _toolToolbar = toolToolbar;
         var filters = BuildFilterBar();
         _toolbar = toolbar;
         _filters = filters;
@@ -89,6 +91,7 @@ BuildMenu();
 
         content.Controls.Add(_menu, 0, 0);
         content.Controls.Add(toolbar, 0, 1);
+        content.Controls.Add(toolToolbar, 0, 1);
         content.Controls.Add(filters, 0, 2);
         content.Controls.Add(_moduleHost, 0, 3);
         content.Controls.Add(bottom, 0, 4);
@@ -251,6 +254,53 @@ BuildMenu();
 
         _menu.Items.AddRange([file, removal, view, options, help]);
         _menu.Name = "mainMenu";
+    }
+
+/// <summary>
+    /// Toolbar for the Tools modules. The program toolbar's actions - search programs, scan
+    /// leftovers, uninstall - mean nothing here, so each module brings its own controls and
+    /// this bar keeps only what is true regardless of module.
+    /// </summary>
+    private Control BuildToolToolbar()
+    {
+        var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 9, 12, 9) };
+        panel.BackColor = Theme.Current.Surface;
+
+        var layout = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            BackColor = Theme.Current.Surface,
+            Margin = Padding.Empty,
+        };
+
+        _toolBadge = new Label
+        {
+            AutoSize = false,
+            Width = 90,
+            Height = 30,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = Theme.Current.TextDim,
+            Margin = new Padding(0, 4, 14, 0),
+        };
+
+        _toolModuleLabel = new Label
+        {
+            AutoSize = false,
+            Width = 320,
+            Height = 30,
+            TextAlign = ContentAlignment.MiddleRight,
+            ForeColor = Theme.Current.TextDim,
+            Margin = new Padding(0, 4, 14, 0),
+            Padding = new Padding(0, 0, 4, 0),
+        };
+
+        layout.Controls.Add(_toolBadge);
+        layout.Controls.Add(_toolModuleLabel);
+        panel.Controls.Add(layout);
+        UpdateToolToolbar();
+        return panel;
     }
 
 private Control BuildToolbar()
@@ -967,14 +1017,21 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
 
         _grid.Visible = false;
 
-        // Only the list-shaped modules share the program filter row.
+        // Only the list-shaped modules share the program filter row and the program toolbar.
         bool isListModule = key is "programs" or "traced" or "apps" or "extensions";
         _filters.Visible = isListModule;
-        _toolbar.Visible = true;
+        _toolbar.Visible = isListModule;
+        _toolToolbar.Visible = !isListModule;
 
         if (isListModule)
         {
             _grid.Visible = true;
+        }
+        else if (key == "wintools")
+        {
+            _modules[key] = new WindowsToolsPanel();
+            _moduleHost.Controls.Add(_modules[key]);
+            _modules[key].Visible = true;
         }
         else if (_modules.TryGetValue(key, out Control? module))
         {
@@ -990,7 +1047,28 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
 
         string? description = _nav.DescriptionFor(key);
         _description.SetText(ModuleTitle(key), description ?? string.Empty);
+        UpdateToolToolbar();
         UpdateSelection();
+    }
+
+    /// <summary>Refreshes the Tools toolbar caption and elevation badge.</summary>
+    private void UpdateToolToolbar()
+    {
+        if (_toolModuleLabel is null)
+        {
+            return;
+        }
+
+        bool elevated = Program.IsElevated;
+        _toolModuleLabel.Text = ModuleTitle(_currentModule);
+        _toolBadge.Text = elevated ? "Elevated" : "Not elevated";
+
+        // A fixed width truncated the badge to "Not". Size both labels from their own text.
+        _toolBadge.Width = Math.Max(70, TextRenderer.MeasureText(_toolBadge.Text, _toolBadge.Font).Width + 12);
+        _toolModuleLabel.Width = Math.Max(
+            160,
+            TextRenderer.MeasureText(_toolModuleLabel.Text, _toolModuleLabel.Font).Width + 12);
+        _toolBadge.ForeColor = elevated ? Theme.Current.Success : Theme.Current.Warning;
     }
 
     private string ModuleTitle(string key) =>
@@ -1052,7 +1130,7 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
                     case "settings": ShowSettings(); break;
                     case "activity": ShowActivity(); break;
                     case "about": ShowAbout(); break;
-                    default: LogStore.Warn($"Unknown UI probe view '{_probeView}'."); break;
+                    default: ShowModule(_probeView); break;
                 }
             }));
             return;
@@ -1214,6 +1292,9 @@ private void ApplyFilter()
     private Panel _moduleHost = null!;
     private Control _toolbar = null!;
     private Control _filters = null!;
+    private Control _toolToolbar = null!;
+    private Label _toolModuleLabel = null!;
+    private Label _toolBadge = null!;
     private readonly Dictionary<string, Control> _modules = new(StringComparer.Ordinal);
     private string _currentModule = "programs";
     private bool _recentFirst = true;
