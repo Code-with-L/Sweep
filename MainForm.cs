@@ -77,7 +77,7 @@ BuildMenu();
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, BottomBarHeight));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         root.Controls.Add(_menu, 0, 0);
@@ -392,16 +392,23 @@ private void RefreshDriveFilter()
         _driveFilter.SelectedIndex = index >= 0 ? index : 0;
     }
 
+    /// <summary>
+    /// Height of the selection bar. The table row and the panel itself both take this value.
+    /// They used to be two separate literals, and when only one of them grew the panel was
+    /// clipped to the row - which cut the bottom off the Activity log button.
+    /// </summary>
+    private const int BottomBarHeight = 48;
+
     private Panel BuildBottomBar()
     {
-        var panel = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(14, 8, 14, 8) };
+        var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 8) };
         panel.BackColor = Theme.Current.Surface;
 
         _selectionInfo.AutoSize = false;
         _selectionInfo.Dock = DockStyle.Fill;
         _selectionInfo.TextAlign = ContentAlignment.MiddleLeft;
 
-        var activity = new Button { Text = "Activity log", Dock = DockStyle.Right, Width = 110, Height = 28 };
+        var activity = new Button { Text = "Activity log", Dock = DockStyle.Right, Width = 116, Height = 32 };
         Theme.StyleButton(activity, Theme.Current);
         activity.Click += (_, _) => ShowActivity();
 
