@@ -56,14 +56,21 @@ internal sealed class MainForm : ThemedForm
 BuildMenu();
         var toolbar = BuildToolbar();
         var filters = BuildFilterBar();
+        _toolbar = toolbar;
+        _filters = filters;
         var bottom = BuildBottomBar();
         var status = BuildStatusStrip();
         BuildGrid();
         BuildContextMenu();
 
+        _nav = new NavRail();
+        _description = new DescriptionPanel();
+        _moduleHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Current.Surface, Margin = Padding.Empty };
+        _moduleHost.Controls.Add(_grid);
+
         // An explicit table avoids WinForms dock-order surprises: the fill control used to
         // swallow the status strip and selection bar.
-        var root = new TableLayoutPanel
+        var content = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
@@ -72,22 +79,41 @@ BuildMenu();
             Padding = Padding.Empty,
         };
 
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, BottomBarHeight));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, BottomBarHeight));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        root.Controls.Add(_menu, 0, 0);
-        root.Controls.Add(toolbar, 0, 1);
-        root.Controls.Add(filters, 0, 2);
-        root.Controls.Add(_grid, 0, 3);
-        root.Controls.Add(bottom, 0, 4);
-        root.Controls.Add(status, 0, 5);
+        content.Controls.Add(_menu, 0, 0);
+        content.Controls.Add(toolbar, 0, 1);
+        content.Controls.Add(filters, 0, 2);
+        content.Controls.Add(_moduleHost, 0, 3);
+        content.Controls.Add(bottom, 0, 4);
+        content.Controls.Add(status, 0, 5);
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty,
+        };
+
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.Controls.Add(_nav, 0, 0);
+        root.Controls.Add(content, 1, 0);
 
         Controls.Add(root);
+        Controls.Add(_description);
+
+        _nav.ModuleRequested += (_, key) => ShowModule(key);
+        ShowModule("programs");
 
         ApplyTheme();
 
@@ -128,6 +154,9 @@ BuildMenu();
         {
             Theme.StyleComboBox(box, p);
         }
+
+        _nav.Restyle();
+        _description.Restyle();
         Theme.StyleButton(_uninstallButton, p, primary: true);
         Theme.StyleButton(_scanButton, p);
         _search.BackColor = p.SurfaceAlt;
@@ -439,6 +468,33 @@ private void RefreshDriveFilter()
         _grid.ReadOnly = true;
         _grid.ShowCellToolTips = true;
 
+        // The navigation rail took 210px away from the list, so the fixed column widths no
+        // longer fit. Rather than let a horizontal scrollbar hide half the columns, the grid
+        // keeps Application sized to whatever is left over.
+        _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        _grid.ColumnHeadersHeight = 30;
+
+        // Clipped column titles were a recurring defect, and hand-tuning MinimumWidth for each
+        // one just moves the problem when the font or DPI changes. Measure every header and
+        // give each column at least enough room for its own title, so a title can never be
+        // cut off no matter how narrow the window gets.
+        foreach (DataGridViewColumn column in _grid.Columns)
+        {
+            if (!column.Visible || string.IsNullOrEmpty(column.HeaderText))
+            {
+                continue;
+            }
+
+            int needed = TextRenderer.MeasureText(
+                column.HeaderText,
+                _grid.ColumnHeadersDefaultCellStyle.Font ?? _grid.Font,
+                new Size(int.MaxValue, int.MaxValue),
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+
+            column.MinimumWidth = Math.Max(column.MinimumWidth, needed + 18);
+        }
+
         // The cell is sized to the icon and the icon is rendered at the cell's exact
         // pixel size, so GDI+ draws it 1:1. A fixed 32px icon in a fixed 38px row was
         // scaled by the grid at higher DPIs and came out squashed and clipped.
@@ -451,6 +507,9 @@ private void RefreshDriveFilter()
         _grid.Columns.Add(new DataGridViewImageColumn
         {
             Name = "icon",
+            // An image column with no HeaderText shows its Name, which put a stray "icon"
+            // caption above the artwork.
+            HeaderText = string.Empty,
             Resizable = DataGridViewTriState.False,
 
             // Left unset, this column's ValueType is null, which is how a null icon ends
@@ -459,15 +518,20 @@ private void RefreshDriveFilter()
             DefaultCellStyle = iconStyle,
         });
 
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Application", ToolTipText = "Application", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 200 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "size", HeaderText = "Size", ToolTipText = "Installed size", Width = 92 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "version", HeaderText = "Version", ToolTipText = "Version", Width = 118 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "arch", HeaderText = "Type", ToolTipText = "32-bit or 64-bit program", Width = 76 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "installed", HeaderText = "Install Date", ToolTipText = "Install Date", Width = 104 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "publisher", HeaderText = "Company", ToolTipText = "Company / Publisher", Width = 170 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "website", HeaderText = "Website", ToolTipText = "Website", Width = 150 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "comment", HeaderText = "Comment", ToolTipText = "Comment", Width = 150 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "uninstall", HeaderText = "Uninstall String", ToolTipText = "Registered uninstall command", Width = 240, Visible = false });
+        _grid.Columns["icon"]!.FillWeight = 6;
+        _grid.Columns["icon"]!.MinimumWidth = 40;
+
+        // Application takes most of the leftover width; the rest are weighted so a narrower
+        // window shrinks the optional columns before it squeezes the name.
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Application", ToolTipText = "Application", FillWeight = 120, MinimumWidth = 190 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "size", HeaderText = "Size", ToolTipText = "Installed size", FillWeight = 40, MinimumWidth = 76 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "version", HeaderText = "Version", ToolTipText = "Version", FillWeight = 55, MinimumWidth = 96 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "arch", HeaderText = "Type", ToolTipText = "32-bit or 64-bit program", FillWeight = 34, MinimumWidth = 66 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "installed", HeaderText = "Install Date", ToolTipText = "Install Date", FillWeight = 56, MinimumWidth = 112 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "publisher", HeaderText = "Company", ToolTipText = "Company / Publisher", FillWeight = 70, MinimumWidth = 130 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "website", HeaderText = "Website", ToolTipText = "Website", FillWeight = 60, MinimumWidth = 110 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "comment", HeaderText = "Comment", ToolTipText = "Comment", FillWeight = 60, MinimumWidth = 110 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "uninstall", HeaderText = "Uninstall String", ToolTipText = "Registered uninstall command", Visible = false, FillWeight = 60, MinimumWidth = 200 });
 
         _grid.CellValueNeeded += OnCellValueNeeded;
         _grid.CellFormatting += OnCellFormatting;
@@ -885,6 +949,94 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
         RunProbeIfRequested();
     }
 
+    /// <summary>
+    /// Switches the content area to a module.
+    ///
+    /// The program list keeps its own filter bar; the Tools modules bring their own controls,
+    /// so the filter row is hidden for them rather than left sitting there doing nothing.
+    /// </summary>
+    private void ShowModule(string key)
+    {
+        _currentModule = key;
+        _nav.Select(key);
+
+        foreach (Control panel in _modules.Values)
+        {
+            panel.Visible = false;
+        }
+
+        _grid.Visible = false;
+
+        // Only the list-shaped modules share the program filter row.
+        bool isListModule = key is "programs" or "traced" or "apps" or "extensions";
+        _filters.Visible = isListModule;
+        _toolbar.Visible = true;
+
+        if (isListModule)
+        {
+            _grid.Visible = true;
+        }
+        else if (_modules.TryGetValue(key, out Control? module))
+        {
+            module.Visible = true;
+        }
+        else
+        {
+            _modules[key] = BuildPendingModule(key);
+            Control pending = _modules[key];
+            _moduleHost.Controls.Add(pending);
+            pending.Visible = true;
+        }
+
+        string? description = _nav.DescriptionFor(key);
+        _description.SetText(ModuleTitle(key), description ?? string.Empty);
+        UpdateSelection();
+    }
+
+    private string ModuleTitle(string key) =>
+        NavRail.AllItems().FirstOrDefault(i => i.Key == key)?.Label ?? "Sweep";
+
+    /// <summary>
+    /// Placeholder for a module that has not been built yet.
+    ///
+    /// It is deliberately visible rather than a dead rail entry: a button that opens nothing
+    /// looks like a broken application, and saying plainly what is missing is more useful.
+    /// </summary>
+    private Control BuildPendingModule(string key)
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.Current.Surface,
+            Padding = new Padding(28),
+        };
+
+        var title = new Label
+        {
+            Text = ModuleTitle(key),
+            Dock = DockStyle.Top,
+            Height = 30,
+            ForeColor = Theme.Current.Text,
+            Font = new Font(Font.FontFamily, Font.Size + 2f, FontStyle.Bold),
+            Padding = new Padding(0, 0, 4, 0),
+            AutoSize = false,
+        };
+
+        var note = new Label
+        {
+            Text = "This module is not built yet. Pick another one from the list on the left.",
+            Dock = DockStyle.Top,
+            Height = 24,
+            ForeColor = Theme.Current.TextDim,
+            Padding = new Padding(0, 0, 4, 0),
+            AutoSize = false,
+        };
+
+        panel.Controls.Add(note);
+        panel.Controls.Add(title);
+        return panel;
+    }
+
     /// <summary>Diagnostic hook for automated UI screenshots; runs once the list is loaded.</summary>
     private void RunProbeIfRequested()
     {
@@ -1057,6 +1209,13 @@ private void ApplyFilter()
     private readonly ThemedComboBox _driveFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96 };
     private readonly Label _countLabel = new() { AutoSize = true };
     private readonly GroupIndex _groups = new() { Enabled = true };
+    private NavRail _nav = null!;
+    private DescriptionPanel _description = null!;
+    private Panel _moduleHost = null!;
+    private Control _toolbar = null!;
+    private Control _filters = null!;
+    private readonly Dictionary<string, Control> _modules = new(StringComparer.Ordinal);
+    private string _currentModule = "programs";
     private bool _recentFirst = true;
     private int _recentWindowDays = 30;
     private string _sortColumn = "name";
