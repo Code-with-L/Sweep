@@ -25,8 +25,11 @@ public sealed record AutorunItem(
 /// Disabling uses the real APIs - the Service Control Manager and schtasks - rather than
 /// editing registry values, because SCM caches start types and a registry edit appears to
 /// work and then silently reverts. Both changes are reversible.
+///
+/// This is a Panel rather than a Form so it can live inside the main window's module host;
+/// opening it in its own window used to hide it behind a second frame with its own title bar.
 /// </summary>
-internal sealed class AutorunForm : ThemedForm
+internal sealed class AutorunPanel : Panel
 {
     private readonly ListView _list = new()
     {
@@ -47,15 +50,14 @@ internal sealed class AutorunForm : ThemedForm
     private readonly TextBox _search = new();
     private List<AutorunItem> _all = [];
 
-    public AutorunForm()
+    /// <summary>Set once the first load completes, so revisiting the module does not re-scan.</summary>
+    private bool _loaded;
+
+    public AutorunPanel()
     {
         var p = Theme.Current;
 
-        Text = "Startup entries";
-        StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(1060, 620);
-        MinimumSize = new Size(760, 440);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        Dock = DockStyle.Fill;
         BackColor = p.Background;
         ForeColor = p.Text;
 
@@ -65,7 +67,11 @@ internal sealed class AutorunForm : ThemedForm
         _list.Columns.Add("Type", 110);
         _list.Columns.Add("Name", 200);
         _list.Columns.Add("State", 90);
-        _list.Columns.Add("Command", 600);
+        _list.Columns.Add("Command", 400);
+
+        // The command line is the widest thing here, so it absorbs whatever space is left
+        // rather than forcing a horizontal scrollbar.
+        _list.SizeChanged += (_, _) => FitColumns();
 
         var searchLabel = new Label { Text = "Search", AutoSize = true, Location = new Point(14, 15) };
         _search.Location = new Point(58, 11);
@@ -105,31 +111,29 @@ internal sealed class AutorunForm : ThemedForm
         };
 
         _disableButton.Text = "Stop auto starting";
-        _disableButton.Size = new Size(140, 32);
+        
         _disableButton.Click += (_, _) => SetEnabled(false);
 
         _enableButton.Text = "Enable auto start";
-        _enableButton.Size = new Size(130, 32);
+        
         _enableButton.Click += (_, _) => SetEnabled(true);
 
         _openButton.Text = "Open location";
-        _openButton.Size = new Size(110, 32);
+        
         _openButton.Click += (_, _) => OpenLocation();
 
         _refreshButton.Text = "Refresh";
-        _refreshButton.Size = new Size(90, 32);
+        
         _refreshButton.Click += async (_, _) => await LoadAsync();
-
-        var close = new Button { Text = "Close", Size = new Size(80, 32) };
-        close.Click += (_, _) => Close();
 
         Theme.StyleButton(_disableButton, p, primary: true);
         Theme.StyleButton(_enableButton, p);
         Theme.StyleButton(_openButton, p);
         Theme.StyleButton(_refreshButton, p);
-        Theme.StyleButton(close, p);
 
-        toolbar.Controls.Add(close);
+        // No Close button: the module lives inside the main window, and the main window already
+        // has a close button. A second one that only worked in the old standalone window
+        // would just be dead weight.
         toolbar.Controls.Add(_openButton);
         toolbar.Controls.Add(_disableButton);
         toolbar.Controls.Add(_enableButton);
@@ -154,7 +158,24 @@ internal sealed class AutorunForm : ThemedForm
         Controls.Add(root);
 
         _list.SelectedIndexChanged += (_, _) => UpdateButtons();
-        Shown += async (_, _) => await LoadAsync();
+    }
+
+    /// <summary>
+    /// Runs the first scan when the module is first opened.
+    ///
+    /// A Panel has no Shown event of its own, so the host calls this when the module becomes
+    /// visible. Re-entry is ignored: coming back to the module should not silently re-scan
+    /// services and scheduled tasks.
+    /// </summary>
+    public async Task EnsureLoadedAsync()
+    {
+        if (_loaded)
+        {
+            return;
+        }
+
+        _loaded = true;
+        await LoadAsync();
     }
 
     private bool _reloading;
@@ -164,6 +185,36 @@ internal sealed class AutorunForm : ThemedForm
     /// Positions a filter chip after the previous one. Fixed pixel offsets overlap as soon
     /// as the system font or DPI changes.
     /// </summary>
+    /// <summary>Gives the command column the space the other three do not need.</summary>
+    private void FitColumns()
+    {
+        if (_list.Columns.Count == 0)
+        {
+            return;
+        }
+
+        int fixedWidth = 0;
+        for (int i = 0; i < _list.Columns.Count - 1; i++)
+        {
+            fixedWidth += _list.Columns[i].Width;
+        }
+
+        int available = _list.ClientSize.Width - fixedWidth - 4;
+        if (available > 80)
+        {
+            _list.Columns[^1].Width = available;
+        }
+    }
+
+    /// <summary>Plain-language type names; the enum names read like code in a list.</summary>
+    private static string KindLabel(AutorunKind kind) => kind switch
+    {
+        AutorunKind.StartupEntry => "Startup",
+        AutorunKind.Service => "Service",
+        AutorunKind.ScheduledTask => "Task",
+        _ => kind.ToString(),
+    };
+
     private static int LayoutChip(Control chip, int x)
     {
         chip.Location = new Point(x, 14);
@@ -297,7 +348,8 @@ internal sealed class AutorunForm : ThemedForm
 
         foreach (var item in filtered)
         {
-            var view = new ListViewItem(item.Kind.ToString()) { Tag = item };
+            // Kind.ToString() leaked "StartupEntry" into the Type column.
+            var view = new ListViewItem(KindLabel(item.Kind)) { Tag = item };
             view.SubItems.Add(item.Name);
             view.SubItems.Add(item.State);
             view.SubItems.Add(item.CommandDisplay);

@@ -1,7 +1,7 @@
 namespace Sweep;
 
 /// <summary>Store / MSIX app inventory, which the classic program list cannot see.</summary>
-internal sealed class WindowsAppsForm : ThemedForm
+internal sealed class WindowsAppsPanel : Panel
 {
     private readonly ListView _list = new() { View = View.Details, FullRowSelect = true, HideSelection = false };
     private readonly ToolStripStatusLabel _status = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -12,15 +12,11 @@ internal sealed class WindowsAppsForm : ThemedForm
     private readonly TextBox _search = new();
     private List<WindowsApp> _all = [];
 
-    public WindowsAppsForm()
+public WindowsAppsPanel()
     {
         var p = Theme.Current;
 
-        Text = "Windows Apps (Store / MSIX)";
-        StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(1000, 600);
-        MinimumSize = new Size(720, 420);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        Dock = DockStyle.Fill;
         BackColor = p.Background;
         ForeColor = p.Text;
 
@@ -30,7 +26,12 @@ internal sealed class WindowsAppsForm : ThemedForm
         _list.Columns.Add("Name", 260);
         _list.Columns.Add("Version", 90);
         _list.Columns.Add("Publisher", 220);
-        _list.Columns.Add("Package", 380);
+        _list.Columns.Add("Package", 320);
+
+        // The package full name is the widest thing here, so it gets whatever space is left.
+        // A fixed width either truncated it or left a horizontal scrollbar, so the column is
+        // resized whenever the list itself is.
+        _list.SizeChanged += (_, _) => FitColumns();
 
         var searchLabel = new Label { Text = "Search", AutoSize = true, Location = new Point(14, 15) };
         _search.Location = new Point(58, 11);
@@ -55,23 +56,15 @@ internal sealed class WindowsAppsForm : ThemedForm
         };
 
         _removeButton.Text = "Remove selected";
-        _removeButton.Size = new Size(140, 32);
         _removeButton.Enabled = false;
         _removeButton.Click += async (_, _) => await RemoveSelectedAsync();
 
         _refreshButton.Text = "Refresh";
-        _refreshButton.Size = new Size(90, 32);
         _refreshButton.Click += async (_, _) => await LoadAsync();
-
-        var close = new Button { Text = "Close", Size = new Size(80, 32) };
-        close.Click += (_, _) => Close();
 
         Theme.StyleButton(_removeButton, p, primary: true);
         Theme.StyleButton(_refreshButton, p);
-        Theme.StyleButton(close, p);
         Theme.StyleTextBox(_search, p);
-
-        toolbar.Controls.Add(close);
         toolbar.Controls.Add(_removeButton);
         toolbar.Controls.Add(_refreshButton);
 
@@ -94,7 +87,41 @@ internal sealed class WindowsAppsForm : ThemedForm
         Controls.Add(root);
 
         _list.SelectedIndexChanged += (_, _) => _removeButton.Enabled = _list.SelectedItems.Count > 0;
-        Shown += async (_, _) => await LoadAsync();
+    }
+
+    /// <summary>Gives the package column the space the other three do not need.</summary>
+    private void FitColumns()
+    {
+        if (_list.Columns.Count == 0)
+        {
+            return;
+        }
+
+        int fixedWidth = 0;
+        for (int i = 0; i < _list.Columns.Count - 1; i++)
+        {
+            fixedWidth += _list.Columns[i].Width;
+        }
+
+        int available = _list.ClientSize.Width - fixedWidth - 4;
+        if (available > 80)
+        {
+            _list.Columns[^1].Width = available;
+        }
+    }
+
+    /// <summary>Runs the first package query when the module is first opened.</summary>
+    private bool _loaded;
+
+    public async Task EnsureLoadedAsync()
+    {
+        if (_loaded)
+        {
+            return;
+        }
+
+        _loaded = true;
+        await LoadAsync();
     }
 
     private async Task LoadAsync()

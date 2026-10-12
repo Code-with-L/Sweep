@@ -128,6 +128,20 @@ internal static class Theme
         button.ForeColor = primary ? p.AccentText : p.Text;
         button.FlatAppearance.MouseOverBackColor = primary ? p.Accent : p.Selection;
         button.Cursor = Cursors.Hand;
+        SizeToText(button);
+    }
+
+    /// <summary>
+    /// Widens a button to fit its own caption.
+    ///
+    /// Fixed widths clipped captions as soon as the system font or DPI changed - "Enable
+    /// auto start" became "Enable auto". Measuring instead of guessing means a caption
+    /// cannot be cut off, and it has to be called again if the text changes at runtime.
+    /// </summary>
+    public static void SizeToText(Button button, int minimum = 0)
+    {
+        int text = TextRenderer.MeasureText(button.Text, button.Font).Width;
+        button.Width = Math.Max(minimum, text + 32);
     }
 
     public static void StyleTextBox(TextBoxBase box, Palette p)

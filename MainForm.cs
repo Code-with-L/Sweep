@@ -211,11 +211,11 @@ BuildMenu();
         removal.DropDownItems.Add(_lastUninstalledItem);
 
         var view = new ToolStripMenuItem("&View");
-        view.DropDownItems.Add(new ToolStripMenuItem("&Startup entries...", null, (_, _) => OpenForm<AutorunForm>())
+        view.DropDownItems.Add(new ToolStripMenuItem("&Startup entries...", null, (_, _) => ShowModule("autorun"))
         {
             Name = "startup",
         });
-        view.DropDownItems.Add(new ToolStripMenuItem("&Windows Apps (Store)...", null, (_, _) => OpenForm<WindowsAppsForm>())
+        view.DropDownItems.Add(new ToolStripMenuItem("&Windows Apps (Store)...", null, (_, _) => ShowModule("apps"))
         {
             Name = "storeApps",
         });
@@ -1017,13 +1017,15 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
 
         _grid.Visible = false;
 
-        // Only the list-shaped modules share the program filter row and the program toolbar.
-        bool isListModule = key is "programs" or "traced" or "apps" or "extensions";
+        // "programs" and "traced" are backed by the main DataGridView; every other module brings
+        // its own control and its own search box, so the program filter row does not apply.
+        bool usesProgramGrid = key is "programs" or "traced";
+        bool isListModule = usesProgramGrid;
         _filters.Visible = isListModule;
         _toolbar.Visible = isListModule;
         _toolToolbar.Visible = !isListModule;
 
-        if (isListModule)
+        if (usesProgramGrid)
         {
             _grid.Visible = true;
         }
@@ -1032,6 +1034,25 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
             _modules[key] = new WindowsToolsPanel();
             _moduleHost.Controls.Add(_modules[key]);
             _modules[key].Visible = true;
+        }
+        else if (key == "autorun")
+        {
+            var panel = new AutorunPanel();
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+
+            // A Panel has no Shown event, so the first scan is kicked off once the host is
+            // back on screen rather than during module construction.
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
+        else if (key == "apps")
+        {
+            var panel = new WindowsAppsPanel();
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
         }
         else if (_modules.TryGetValue(key, out Control? module))
         {
@@ -1125,8 +1146,8 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
             {
                 switch (_probeView)
                 {
-                    case "startup": OpenForm<AutorunForm>(); break;
-                    case "store": OpenForm<WindowsAppsForm>(); break;
+                    case "startup": ShowModule("autorun"); break;
+                    case "store": ShowModule("apps"); break;
                     case "settings": ShowSettings(); break;
                     case "activity": ShowActivity(); break;
                     case "about": ShowAbout(); break;

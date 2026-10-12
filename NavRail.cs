@@ -220,10 +220,6 @@ internal sealed class NavRail : Panel
             "The built-in Windows utilities, grouped by what they are for, each with its command line shown so you can reuse it. Add your own."),
         new("history", "History Cleaner", "Tools",
             "Clears browsing history, cookies, caches, form and download history per browser, plus Windows recent items and Office document history."),
-        new("evidence", "Evidence Remover", "Tools",
-            "Overwrites deleted free space on a drive so the contents of removed files cannot be recovered. This cannot be undone."),
-        new("wipe", "Unrecoverable Delete", "Tools",
-            "Overwrites files with random data before deleting them, so the contents cannot be read even before the blocks are reused."),
         new("backup", "Backup Manager", "Tools",
             "Registry and file backups taken before removals, with the ability to put any of them back exactly as they were."),
     ];
