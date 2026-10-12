@@ -1,7 +1,8 @@
 namespace Sweep;
 
 /// <summary>One selectable entry in the left navigation rail.</summary>
-internal sealed record NavItem(string Key, string Label, string Group, string Description);
+internal sealed record NavItem(
+    string Key, string Label, string Group, ModuleIcons.Glyph Icon, string Description);
 
 /// <summary>
 /// The left navigation rail.
@@ -22,7 +23,7 @@ internal sealed class NavRail : Panel
     private readonly Dictionary<string, Button> _buttons = new(StringComparer.Ordinal);
     private readonly TextBox _search;
     private readonly FlowLayoutPanel _list;
-    private readonly Dictionary<string, NavItem> _items = new(StringComparer.Ordinal);
+    private string _selectedKey = "programs";    private readonly Dictionary<string, NavItem> _items = new(StringComparer.Ordinal);
 
     public event EventHandler<string>? ModuleRequested;
 
@@ -137,9 +138,9 @@ internal sealed class NavRail : Panel
     {
         var button = new Button
         {
-            Text = "   " + item.Label,
+            Text = item.Label,
             Width = RailWidth - 4,
-            Height = 30,
+            Height = 32,
             FlatStyle = FlatStyle.Flat,
             TextAlign = ContentAlignment.MiddleLeft,
             Margin = Padding.Empty,
@@ -147,15 +148,29 @@ internal sealed class NavRail : Panel
             BackColor = Theme.Current.Surface,
             ForeColor = Theme.Current.Text,
             Cursor = Cursors.Hand,
+
+            // Image-before-text with padding, rather than a padded string. Manual spaces were
+            // a fixed number of pixels wide regardless of font, which is what made the glyph
+            // sit on top of the label.
+            ImageAlign = ContentAlignment.MiddleLeft,
+            TextImageRelation = TextImageRelation.ImageBeforeText,
+            Padding = new Padding(12, 0, 6, 0),
         };
 
         button.FlatAppearance.BorderSize = 0;
         button.FlatAppearance.MouseOverBackColor = Theme.Current.SurfaceAlt;
         button.Click += (_, _) => ModuleRequested?.Invoke(this, item.Key);
 
+        button.Image = ModuleIcons.Render(item.Icon, Theme.Current.TextDim, IconSize);
+
         _buttons[item.Key] = button;
         return button;
     }
+
+    private const int IconSize = 18;
+
+    /// <summary>Button plus what it needs to be re-rendered when the theme changes.</summary>
+    private sealed record ButtonTag(string Key, string Label, ModuleIcons.Glyph Icon);
 
     /// <summary>Filters the rail by label, matching anywhere in the name.</summary>
     private void ApplyFilter(string query)
@@ -172,11 +187,22 @@ internal sealed class NavRail : Panel
 
     public void Select(string key)
     {
+        _selectedKey = key;
+
         foreach ((string k, Button button) in _buttons)
         {
             bool active = string.Equals(k, key, StringComparison.Ordinal);
             button.BackColor = active ? Theme.Current.Selection : Theme.Current.Surface;
             button.ForeColor = active ? Theme.Current.Accent : Theme.Current.Text;
+
+            if (button.Tag is ButtonTag tag)
+            {
+                button.Image?.Dispose();
+                button.Image = ModuleIcons.Render(
+                    tag.Icon,
+                    active ? Theme.Current.Accent : Theme.Current.TextDim,
+                    IconSize);
+            }
         }
     }
 
@@ -194,6 +220,19 @@ internal sealed class NavRail : Panel
             button.BackColor = Theme.Current.Surface;
             button.ForeColor = Theme.Current.Text;
             button.FlatAppearance.MouseOverBackColor = Theme.Current.SurfaceAlt;
+
+            // Icons are bitmaps, so they have to be re-rendered for the new palette and DPI
+            // rather than just recoloured.
+            if (button.Tag is ButtonTag tag)
+            {
+                button.Image?.Dispose();
+                button.Image = ModuleIcons.Render(
+                    tag.Icon,
+                    string.Equals(tag.Key, _selectedKey, StringComparison.Ordinal)
+                        ? Theme.Current.Accent
+                        : Theme.Current.TextDim,
+                    IconSize);
+            }
         }
     }
 
@@ -202,25 +241,25 @@ internal sealed class NavRail : Panel
     /// </summary>
     internal static IEnumerable<NavItem> AllItems() =>
     [
-        new("programs", "All Programs", "Uninstaller",
+        new("programs", "All Programs", "Uninstaller", ModuleIcons.Glyph.Programs,
             "All installed programs and components, for the current user and for every user on the machine, grouped into recently installed and the rest."),
-        new("traced", "Traced Programs", "Uninstaller",
+        new("traced", "Traced Programs", "Uninstaller", ModuleIcons.Glyph.Traced,
             "Programs recorded by the installation monitor, with the files and registry entries they added. Lets you remove something whose uninstaller never registered."),
-        new("apps", "Windows Apps", "Uninstaller",
+        new("apps", "Windows Apps", "Uninstaller", ModuleIcons.Glyph.Store,
             "Store and packaged apps, including provisioning. Some can be reset to their shipped state instead of removed outright."),
-        new("extensions", "Browser Extensions", "Uninstaller",
+        new("extensions", "Browser Extensions", "Uninstaller", ModuleIcons.Glyph.Extension,
             "Add-ons installed into Chrome, Edge and Firefox profiles. These uninstall from the browser itself rather than through Add or Remove Programs."),
-        new("hunter", "Hunter Mode", "Uninstaller",
+        new("hunter", "Hunter Mode", "Uninstaller", ModuleIcons.Glyph.Hunter,
             "Shows every running process with its executable, parent and open handles, so you can see what a stubborn program is actually doing before killing it."),
-        new("autorun", "Autorun Manager", "Tools",
+        new("autorun", "Autorun Manager", "Tools", ModuleIcons.Glyph.Autorun,
             "Startup programs, services and scheduled tasks. Disable, delete or add entries and keep a record of what you changed."),
-        new("junk", "Junk Files Cleaner", "Tools",
+        new("junk", "Junk Files Cleaner", "Tools", ModuleIcons.Glyph.Junk,
             "Temporary files, caches, old logs, thumbnails and crash dumps across all drives, with a running total of what is recoverable."),
-        new("wintools", "Windows Tools", "Tools",
+        new("wintools", "Windows Tools", "Tools", ModuleIcons.Glyph.Tools,
             "The built-in Windows utilities, grouped by what they are for, each with its command line shown so you can reuse it. Add your own."),
-        new("history", "History Cleaner", "Tools",
+        new("history", "History Cleaner", "Tools", ModuleIcons.Glyph.History,
             "Clears browsing history, cookies, caches, form and download history per browser, plus Windows recent items and Office document history."),
-        new("backup", "Backup Manager", "Tools",
+        new("backup", "Backup Manager", "Tools", ModuleIcons.Glyph.Backup,
             "Registry and file backups taken before removals, with the ability to put any of them back exactly as they were."),
     ];
 
@@ -232,7 +271,7 @@ internal sealed class NavRail : Panel
     /// </summary>
     internal static IEnumerable<NavItem> HistoryItem() =>
     [
-        new("uninstallhistory", "Uninstall History", "Tools",
+        new("uninstallhistory", "Uninstall History", "Tools", ModuleIcons.Glyph.Log,
             "Every removal this copy of Sweep has performed, grouped by date, listing what was removed and what could not be. Exportable as text."),
     ];
 }

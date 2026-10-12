@@ -503,8 +503,19 @@ private void RefreshDriveFilter()
         _selectionInfo.Dock = DockStyle.Fill;
         _selectionInfo.TextAlign = ContentAlignment.MiddleLeft;
 
-        var activity = new Button { Text = "Activity log", Dock = DockStyle.Right, Width = 116, Height = 32 };
+        // Fixed and generous. Measured against this font the caption needs ~84px, and the button is
+// given 160 - but see the note in Theme.SizeToText: MeasureText under-reports what a Button
+// draws, so the slack is deliberate rather than calculated.
+var activity = new Button
+        {
+            Text = "Activity log",
+            Dock = DockStyle.Right,
+            AutoSize = false,
+            Width = 160,
+            Height = 32,
+        };
         Theme.StyleButton(activity, Theme.Current);
+        activity.Width = 160;
         activity.Click += (_, _) => ShowActivity();
 
         panel.Controls.Add(_selectionInfo);
