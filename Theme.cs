@@ -81,7 +81,10 @@ internal static class Theme
         grid.EnableHeadersVisualStyles = false;
         grid.RowHeadersVisible = false;
         grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        grid.MultiSelect = false;
+
+        // MultiSelect is deliberately NOT set here. The theme is applied after the grid is
+        // built and again on every theme switch, so forcing it here silently undid the
+        // host's own setting and left the list stuck on single selection.
         grid.RowTemplate.Height = 38;
     }
 
@@ -140,8 +143,10 @@ internal static class Theme
     /// </summary>
     public static void SizeToText(Button button, int minimum = 0)
     {
+        // The slack covers the button's own internal margins and its border. Measuring the
+        // caption alone left a few pixels short, which showed up as a clipped last letter.
         int text = TextRenderer.MeasureText(button.Text, button.Font).Width;
-        button.Width = Math.Max(minimum, text + 32);
+        button.Width = Math.Max(minimum, text + 44);
     }
 
     public static void StyleTextBox(TextBoxBase box, Palette p)

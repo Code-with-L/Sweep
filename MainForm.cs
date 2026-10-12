@@ -171,6 +171,17 @@ BuildMenu();
         _adminBadge.Text = elevated ? "Elevated" : "Not elevated";
         _adminBadge.ForeColor = elevated ? p.Success : p.Warning;
 
+        // Fixed, with room to spare. Measuring here is unreliable this early - the inherited
+        // font is not resolved yet, so the badge came out too narrow and showed only the
+        // middle of the caption.
+        _adminBadge.Width = 120;
+
+        // Re-asserted here because ApplyTheme runs after the toolbar is built and again on
+        // every theme switch, and StyleButton resizes a button to its current caption. Left
+        // alone that shrinks the button back to fit "Uninstall" and clips "Quick Uninstall".
+        _uninstallButton.Width = 152;
+        _scanButton.Width = 150;
+
         _themeDarkItem.Checked = _settings.Theme == ThemeMode.Dark;
         _themeLightItem.Checked = _settings.Theme == ThemeMode.Light;
 
@@ -316,7 +327,7 @@ private Control BuildToolbar()
             Margin = Padding.Empty,
             BackColor = Theme.Current.Surface,
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 540));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 470));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -340,7 +351,7 @@ private Control BuildToolbar()
             Margin = new Padding(2, 8, 8, 0),
         };
 
-        _search.Size = new Size(320, 26);
+        _search.Size = new Size(270, 26);
         _search.Margin = new Padding(0, 2, 10, 0);
         _search.BorderStyle = BorderStyle.FixedSingle;
         Native.SetCueBanner(_search, "Search programs, publishers or folders");
@@ -362,32 +373,37 @@ private Control BuildToolbar()
         };
 
         _uninstallButton.Text = "Uninstall";
-        _uninstallButton.Size = new Size(112, 30);
+
+        // Fixed width on purpose. The caption switches to "Quick Uninstall" when several rows
+        // are selected, and resizing the button on every selection change forced the toolbar
+        // to re-layout - which clipped whichever control sat beside it. The selected count
+        // goes to the status bar instead, which is where Revo puts it.
+        _uninstallButton.Size = new Size(152, 30);
         _uninstallButton.Margin = new Padding(0, 0, 8, 0);
-        _uninstallButton.Click += async (_, _) => await UninstallSelectedAsync();
+        _uninstallButton.Click += async (_, _) => await UninstallButtonAsync();
 
         _scanButton.Text = "Scan leftovers";
-        _scanButton.Size = new Size(132, 30);
+        _scanButton.Size = new Size(150, 30);
         _scanButton.Margin = new Padding(0, 0, 16, 0);
         _scanButton.Click += (_, _) => ScanSelected();
 
-        _adminBadge.AutoSize = true;
+        _adminBadge.AutoSize = false;
+        _adminBadge.Width = 120;
+        _adminBadge.TextAlign = ContentAlignment.MiddleCenter;
         _adminBadge.Margin = new Padding(0, 8, 0, 0);
+        _adminBadge.Padding = new Padding(4, 0, 4, 0);
 
         right.Controls.AddRange([_uninstallButton, _scanButton, _adminBadge]);
+
+        // Widths re-asserted after styling, because StyleButton sizes a button to its current
+        // caption - right for a button whose text never changes, wrong for this one.
+        _uninstallButton.Size = new Size(152, 30);
+        _scanButton.Size = new Size(150, 30);
 
         layout.Controls.Add(left, 0, 0);
         layout.Controls.Add(right, 1, 0);
         panel.Controls.Add(layout);
         return panel;
-    }
-
-    private void LayoutToolbar(Panel panel, Button refresh)
-    {
-        int right = panel.ClientSize.Width - 14;
-        _scanButton.Location = new Point(right - _scanButton.Width, 11);
-        _uninstallButton.Location = new Point(right - _scanButton.Width - 8 - _uninstallButton.Width, 11);
-        _adminBadge.Location = new Point(right - _scanButton.Width - 120 - _uninstallButton.Width, 17);
     }
 
     private Panel BuildFilterBar()
@@ -997,6 +1013,10 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
         }
 
         RunProbeIfRequested();
+
+        // Asked after the list has loaded so the prompt sits on top of a usable window rather
+        // than an empty one.
+        BeginInvoke((Action)(() => OfferPendingUninstall()));
     }
 
     /// <summary>
@@ -1139,6 +1159,34 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
     /// <summary>Diagnostic hook for automated UI screenshots; runs once the list is loaded.</summary>
     private void RunProbeIfRequested()
     {
+        if (_probeView == "multiselect" && !_probeOpened)
+        {
+            // Selects several rows so the Uninstall -> Quick Uninstall switch can be seen in
+            // a screenshot without anyone having to ctrl-click. Checked before the module
+            // switch, which would otherwise treat "multiselect" as a module name.
+            _probeOpened = true;
+
+            // Double-posted: ApplyFilter queues its own CurrentCell assignment, and that runs
+            // after this would - leaving the current cell as the only selected row.
+            BeginInvoke((Action)(() => BeginInvoke((Action)(() =>
+            {
+                int added = 0;
+                for (int row = 1; row < _grid.RowCount && added < 3; row++)
+                {
+                    if (_groups.IsGroupRow(row))
+                    {
+                        continue;
+                    }
+
+                    _grid.Rows[row].Selected = true;
+                    added++;
+                }
+
+                UpdateSelection();
+            }))));
+            return;
+        }
+
         if (_probeView is not null && !_probeOpened)
         {
             _probeOpened = true;
@@ -1410,6 +1458,30 @@ try
     private static bool Contains(string? value, string query) =>
         !string.IsNullOrEmpty(value) && value.Contains(query, StringComparison.CurrentCultureIgnoreCase);
 
+    /// <summary>
+    /// Every selected program, in list order.
+    ///
+    /// The grid is VirtualMode, so this maps selected row indexes through the same
+    /// group-aware translation the cell painter uses - reading rows directly would pick the
+    /// wrong program once grouping is active, and a wrong program here means running the
+    /// wrong uninstaller.
+    /// </summary>
+    private List<InstalledApp> SelectedApps()
+    {
+        var apps = new List<InstalledApp>();
+
+        foreach (DataGridViewRow row in _grid.SelectedRows)
+        {
+            int dataRow = _groups.DataRowFor(row.Index);
+            if (dataRow >= 0 && dataRow < _filtered.Count)
+            {
+                apps.Add(_filtered[dataRow]);
+            }
+        }
+
+        return apps;
+    }
+
     private InstalledApp? SelectedApp()
     {
         int row = _grid.CurrentCell?.RowIndex ?? -1;
@@ -1426,9 +1498,31 @@ try
     {
         var app = SelectedApp();
 
-        bool hasApp = app is not null;
-        _uninstallButton.Enabled = hasApp && app!.HasUninstaller && !_busy;
-        _scanButton.Enabled = hasApp && !_busy;
+        // More than one row selected means the reviewed single-program flow no longer applies, so
+        // the button becomes Quick Uninstall - the same switch Revo makes.
+        int selected = _grid.SelectedRows.Count;
+        bool quick = selected > 1;
+
+        if (_uninstallButton is not null)
+        {
+            _uninstallButton.Text = quick ? "Quick Uninstall" : "Uninstall";
+        }
+
+        // The count goes in the status bar, not the button, so the caption stays a fixed
+        // length and the toolbar never has to re-layout on every selection change.
+        if (quick)
+        {
+            _statusLabel.Text = $"{selected} selected";
+        }
+
+        bool hasApp = app is not null || quick;
+        Button? uninstall = _uninstallButton;
+        if (uninstall is not null)
+        {
+            uninstall.Enabled = hasApp && !_busy;
+        }
+
+        _scanButton.Enabled = app is not null && !_busy;
         _contextMenu.Items["removeEntry"]!.Enabled = hasApp;
         UpdateContextMenuState();
 
@@ -1540,6 +1634,125 @@ try
         // which meant a user who unticked it to watch the uninstaller could never scan
         // for what was left behind.
         PromptForLeftovers(app, outcome);
+    }
+
+    /// <summary>
+    /// Dispatches on how many rows are selected: one program goes through the reviewed
+    /// single-program flow, several go through Quick Uninstall.
+    /// </summary>
+    private async Task UninstallButtonAsync()
+    {
+        if (_grid.SelectedRows.Count > 1)
+        {
+            await QuickUninstallSelectedAsync();
+        }
+        else
+        {
+            await UninstallSelectedAsync();
+        }
+    }
+
+    /// <summary>
+    /// Batch removal: confirm, then run each uninstaller and clean up after it.
+    ///
+    /// The confirmation is the one place this deliberately differs from Revo, which deletes
+    /// silently in the background. A batch is the worst case for a wrong selection, and it is
+    /// exactly when nobody is watching the screen.
+    /// </summary>
+    private async Task QuickUninstallSelectedAsync()
+    {
+        List<InstalledApp> apps = SelectedApps();
+        if (apps.Count < 2 || _busy)
+        {
+            return;
+        }
+
+        if (!QuickUninstallRunner.Confirm(apps, _settings))
+        {
+            return;
+        }
+
+        var runner = new QuickUninstallRunner(
+            _settings,
+            text => SetStatus(text),
+            busy => SetBusy(busy),
+            () =>
+            {
+                _progress.Style = ProgressBarStyle.Marquee;
+                return string.Empty;
+            });
+
+        _cts = new CancellationTokenSource();
+
+        List<QuickUninstallOutcome> results;
+        try
+        {
+            results = await runner.RunAsync(apps, _cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Quick Uninstall cancelled. Anything already removed stays removed.");
+            await LoadAppsAsync();
+            return;
+        }
+        finally
+        {
+            _progress.Style = ProgressBarStyle.Continuous;
+            _cts.Dispose();
+            _cts = null;
+        }
+
+        await LoadAppsAsync();
+        MessageBox.Show(this, QuickUninstallRunner.Summarise(results), "Sweep - Quick Uninstall",
+            MessageBoxButtons.OK,
+            results.Any(r => r.ExitCode != 0) ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+    }
+
+    /// <summary>
+    /// Offers to finish a removal that was interrupted, most often by a reboot the vendor
+    /// uninstaller asked for.
+    ///
+    /// The age is stated plainly and an old record is called out as stale, because the
+    /// leftover list it implies describes a machine that has changed since it was taken.
+    /// Resuming without saying so would risk deleting something that has since been put back.
+    /// </summary>
+    private void OfferPendingUninstall()
+    {
+        PendingUninstall? pending = PendingUninstallStore.Load();
+        if (pending is null || _busy)
+        {
+            return;
+        }
+
+        var text = new StringBuilder();
+        text.AppendLine($"A removal of \"{pending.Name}\" did not finish.");
+        text.AppendLine($"It was interrupted {pending.AgeDescription}.");
+        text.AppendLine($"Reason: {pending.Reason}");
+        text.AppendLine();
+
+        if (pending.IsStale)
+        {
+            text.AppendLine("That was long enough ago that the machine has probably changed since.");
+            text.AppendLine("Sweep will scan and show you everything before removing it - nothing is");
+            text.AppendLine("deleted without you seeing it. Expect the list to be different from what");
+            text.AppendLine("was left at the time.");
+            text.AppendLine();
+        }
+
+        text.AppendLine("Scan for what this program left behind now?");
+
+        var answer = MessageBox.Show(this, text.ToString(), "Sweep - Unfinished removal",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
+
+        if (answer != DialogResult.Yes)
+        {
+            // Keep the record: declining now should not throw the information away, in case
+            // they want it after they have dealt with whatever is going on.
+            return;
+        }
+
+        OpenResidueForm(pending.ToApp());
+        PendingUninstallStore.Clear();
     }
 
     private InstalledApp? _lastUninstalled;
@@ -1902,7 +2115,13 @@ try
             _settings = SettingsStore.ImportFrom(dialog.FileName);
             SettingsStore.Save(_settings);
             Theme.ApplyMode(_settings.Theme);
-            ApplyTheme();
+ApplyTheme();
+
+        // Set after theming on purpose. ApplyToGrid is the shared styling for every grid in
+        // the app and runs after BuildGrid, so declaring multi-select inside BuildGrid was
+        // silently undone and the list stayed on single selection.
+        _grid.MultiSelect = true;
+        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             LogStore.Success("Settings imported.");
             SetStatus("Settings imported.");
         }
