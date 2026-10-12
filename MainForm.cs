@@ -327,18 +327,28 @@ private Control BuildToolbar()
             Margin = Padding.Empty,
             BackColor = Theme.Current.Surface,
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 470));
+        // The action group gets its natural width and is never squeezed, so Uninstall and
+        // Scan leftovers can never be pushed off the right edge. The search group absorbs
+        // whatever is left over. A fixed 470 here used to overflow the client width and clip
+        // the primary button whenever the window was narrower than the toolbar's content.
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var left = new FlowLayoutPanel
+        // A FlowLayoutPanel hands every child its preferred width and never shrinks, which is
+        // what pushed Refresh off-screen. A table lets the search box be the only flexible part.
+        var left = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
+            ColumnCount = 3,
+            RowCount = 1,
             Margin = Padding.Empty,
             BackColor = Theme.Current.Surface,
         };
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var searchLabel = new Label
         {
@@ -351,6 +361,9 @@ private Control BuildToolbar()
             Margin = new Padding(2, 8, 8, 0),
         };
 
+        // Anchor on both sides so the box stretches with the column and folds down
+        // gracefully instead of forcing the toolbar wider than the window.
+        _search.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         _search.Size = new Size(270, 26);
         _search.Margin = new Padding(0, 2, 10, 0);
         _search.BorderStyle = BorderStyle.FixedSingle;
@@ -360,12 +373,19 @@ private Control BuildToolbar()
         refresh.Click += async (_, _) => await LoadAppsAsync();
         Theme.StyleButton(refresh, Theme.Current);
 
-        left.Controls.AddRange([searchLabel, _search, refresh]);
+        left.Controls.Add(searchLabel, 0, 0);
+        left.Controls.Add(_search, 1, 0);
+        left.Controls.Add(refresh, 2, 0);
 
         // RightToLeft flow keeps the actions against the right edge without any manual maths.
+        // AutoSize + Dock.Top lets the table's AutoSize column measure the real content width,
+        // so the group is never clipped; Dock.Fill here made the column report the full cell
+        // width and overflow the window.
         var right = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Top,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false,
             Margin = Padding.Empty,
