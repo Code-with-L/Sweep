@@ -252,8 +252,12 @@ internal sealed class NavRail : Panel
             "Shows every running process with its executable and install folder, so you can see what a stubborn program is actually doing before killing it."),
         new("autorun", "Autorun Manager", "Tools", ModuleIcons.Glyph.Autorun,
             "Startup programs, services and scheduled tasks. Disable, delete or add entries and keep a record of what you changed."),
+        new("junk", "Junk Files Cleaner", "Tools", ModuleIcons.Glyph.Junk,
+            "Temporary files, crash dumps, thumbnail and shader caches, with the total shown before anything is deleted."),
         new("wintools", "Windows Tools", "Tools", ModuleIcons.Glyph.Tools,
             "The built-in Windows utilities, grouped by what they are for, each with its command line shown so you can reuse it. Add your own."),
+        new("backup", "Backup Manager", "Tools", ModuleIcons.Glyph.Backup,
+            "Quarantine sessions taken before removals: what each one holds, when it was made, and a button to put it back."),
     ];
 
     /// <summary>

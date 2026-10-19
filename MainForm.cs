@@ -1124,6 +1124,22 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
             panel.Visible = true;
             BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
         }
+        else if (key == "junk")
+        {
+            var panel = new JunkPanel();
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
+        else if (key == "backup")
+        {
+            var panel = new BackupManagerPanel();
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
         else if (key == "uninstallhistory")
         {
             _modules[key] = new HistoryPanel();

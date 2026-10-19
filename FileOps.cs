@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Sweep;
 
@@ -87,6 +89,19 @@ internal static class SizeCalculator
 }
 
 public sealed record DeletionResult(bool Success, string Path, bool ScheduledForReboot, string? Error);
+
+/// <summary>One quarantine session, as the Backup Manager lists it.</summary>
+public sealed record QuarantineSession(
+    string Root,
+    string App,
+    DateTime Created,
+    int Items,
+    long Bytes)
+{
+    public string CreatedDisplay => Created.ToString("yyyy-MM-dd HH:mm");
+
+    public string SizeDisplay => SizeCalculator.Format(Bytes);
+}
 
 /// <summary>Filesystem and registry deletion with long-path, read-only and reboot-pending handling.</summary>
 public static class FileOps
@@ -546,6 +561,90 @@ public sealed class Quarantine
     /// <summary>The first quarantine root that currently exists, for "open folder".</summary>
     public static string? ExistingBaseDirectory =>
         BaseDirectories().FirstOrDefault(Directory.Exists);
+
+    private static readonly Regex SessionName = new(
+        @"^(?<app>.+)_(?<stamp>\d{8}_\d{6})_[0-9a-f]{32}$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>Every quarantine session on the machine, newest first.</summary>
+    public static IReadOnlyList<QuarantineSession> Sessions()
+    {
+        var sessions = new List<QuarantineSession>();
+
+        foreach (string root in ListQuarantineRoots())
+        {
+            try
+            {
+                string name = Path.GetFileName(root);
+                Match match = SessionName.Match(name);
+
+                string app = match.Success ? match.Groups["app"].Value : name;
+
+                DateTime created = match.Success &&
+                    DateTime.TryParseExact(
+                        match.Groups["stamp"].Value,
+                        "yyyyMMdd_HHmmss",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.None,
+                        out DateTime parsed)
+                    ? parsed
+                    : Directory.GetCreationTime(root);
+
+                sessions.Add(new QuarantineSession(
+                    root,
+                    app,
+                    created,
+                    CountEntries(root),
+                    MeasureSession(root)));
+            }
+            catch
+            {
+                // Vanished or unreadable between listing and measuring.
+            }
+        }
+
+        return sessions.OrderByDescending(session => session.Created).ToList();
+    }
+
+    private static long MeasureSession(string root)
+    {
+        long total = 0;
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+            MaxRecursionDepth = 8,
+        };
+
+        try
+        {
+            foreach (string file in Directory.EnumerateFiles(root, "*", options))
+            {
+                if (DateTime.UtcNow > deadline)
+                {
+                    break;
+                }
+
+                try
+                {
+                    total += new FileInfo(file).Length;
+                }
+                catch
+                {
+                    // Locked or gone.
+                }
+            }
+        }
+        catch
+        {
+            // Best effort; the size is informational.
+        }
+
+        return total;
+    }
 
     public static IReadOnlyList<string> ListQuarantineRoots()
     {

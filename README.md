@@ -97,6 +97,9 @@ only non-BCL dependency and it ships with the runtime.
 Program.cs           entry point, UAC self-elevation, diagnostic switches
 MainForm.cs          program list, filters, sorting, context menu, uninstall flow
 ResidueForm.cs       the leftover review pane
+JunkPanel.cs         Junk Files Cleaner: measure, select, delete
+JunkScanner.cs       the fixed list of disposable locations
+BackupManagerPanel.cs quarantine sessions, restore and delete
 AutorunForm.cs       startup entries / services / scheduled tasks
 WindowsAppsForm.cs   Store / MSIX apps
 
@@ -191,6 +194,12 @@ Sweep.exe --selftest --app Discord
   | Registry keys | `HKCU\Software`, `HKLM\SOFTWARE` in both WOW64 views |
 
 - **Rates every match** Safe / Moderate / Risky. Risky items start unchecked.
+- **Cleans disposable files**: user and Windows temp folders, crash dumps, legacy internet
+  cache, the Direct3D shader cache and Explorer's thumbnail databases. Every location is
+  measured first and nothing is deleted until you tick it; the folder roots stay, and files
+  in use are skipped rather than forced.
+- **Manages backups**: every quarantine session with its date, item count and size, from
+  where it can be restored or permanently deleted.
 - **Lists Store/MSIX apps**, which never appear in the uninstall registry keys.
 - **Manages startup entries**: disable services and tasks reversibly, open locations.
 - **Filters and sorts** by type, size, drive, and any column.
