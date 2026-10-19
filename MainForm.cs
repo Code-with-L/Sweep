@@ -905,7 +905,7 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = "regedit.exe",
+                FileName = Native.SystemExecutable("regedit.exe"),
                 UseShellExecute = true,
                 ArgumentList = { app.Location.SubKey },
             });
@@ -2027,12 +2027,9 @@ try
 
     private void OpenQuarantineFolder()
     {
-        string dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "Sweep",
-            "Quarantine");
+        string? dir = Quarantine.ExistingBaseDirectory;
 
-        if (!Directory.Exists(dir))
+        if (dir is null)
         {
             MessageBox.Show(this, "The quarantine folder is empty - nothing has been quarantined yet.", "Sweep",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);

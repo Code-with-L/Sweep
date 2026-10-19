@@ -355,7 +355,7 @@ public static class SystemArtifacts
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "schtasks.exe",
+            FileName = Native.SystemExecutable("schtasks.exe"),
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

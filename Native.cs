@@ -40,44 +40,77 @@ internal static class Native
 
     // ---- System Restore -------------------------------------------------
 
-    public const int EVENTTYPE_BEGIN_SYSTEM_CHANGE = 12;
+    // Values from srrestoreptapi.h. BEGIN_SYSTEM_CHANGE is 100; 12 is MODIFY_SETTINGS and was
+    // previously wired in by mistake.
+    public const int EVENTTYPE_BEGIN_SYSTEM_CHANGE = 100;
     public const int RESTORE_POINT_TYPE_APPLICATION_INSTALL = 0;
 
+    private const int MAX_DESC_W = 256;
+
+    /// <summary>
+    /// Matches RESTOREPOINTINFOW exactly: dropping llSequenceNumber (as this struct used to)
+    /// shifts every later field and makes the native call read the description pointer as the
+    /// sequence number.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct RESTOREPOINTINFOW
     {
         public int dwEventType;
         public int dwRestorePointType;
-        public IntPtr szEventTitle;
+        public long llSequenceNumber;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = MAX_DESC_W)]
+        public string szDescription;
     }
 
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int SRSetRestorePointW(ref RESTOREPOINTINFOW pRestorePointInfo, out int pEventType);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct STATEMGRSTATUS
+    {
+        public int nStatus;
+        public long llSequenceNumber;
+    }
 
-    /// <summary>Creates a system restore point. Returns 0 on success; the value is an event id.</summary>
-    public static bool TryCreateRestorePoint(string title, out int eventId, out string error)
+    // SRSetRestorePoint lives in SrClient.dll (link library Sfc.lib), NOT rstrtmgr.dll -
+    // that one is the Restart Manager (RmStartSession), so the old import never resolved.
+    [DllImport("SrClient.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SRSetRestorePointW(
+        ref RESTOREPOINTINFOW pRestorePointInfo,
+        ref STATEMGRSTATUS pStatus);
+
+    /// <summary>
+    /// Creates a system restore point. Returns true when System Restore accepted the request;
+    /// <paramref name="eventId"/> is the sequence number, which is INT64 in the native API.
+    /// </summary>
+    public static bool TryCreateRestorePoint(string title, out long eventId, out string error)
     {
         eventId = 0;
-        error = "";
+        error = string.Empty;
+
+        string description = title.Length > MAX_DESC_W - 1 ? title[..(MAX_DESC_W - 1)] : title;
+
         var info = new RESTOREPOINTINFOW
         {
             dwEventType = EVENTTYPE_BEGIN_SYSTEM_CHANGE,
             dwRestorePointType = RESTORE_POINT_TYPE_APPLICATION_INSTALL,
-            szEventTitle = IntPtr.Zero,
+            llSequenceNumber = 0,
+            szDescription = description,
         };
 
-        IntPtr buf = IntPtr.Zero;
+        var status = new STATEMGRSTATUS();
+
         try
         {
-            buf = Marshal.StringToHGlobalUni(title);
-            info.szEventTitle = buf;
-            if (SRSetRestorePointW(ref info, out int result) != 0)
+            if (SRSetRestorePointW(ref info, ref status))
             {
-                eventId = result;
+                eventId = status.llSequenceNumber;
                 return true;
             }
 
-            error = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).Message;
+            // The return value is BOOL; the reason lives in nStatus, not GetLastError.
+            error = status.nStatus != 0
+                ? new System.ComponentModel.Win32Exception(status.nStatus).Message
+                : "System Restore declined the request.";
             return false;
         }
         catch (Exception ex)
@@ -85,12 +118,35 @@ internal static class Native
             error = ex.Message;
             return false;
         }
-        finally
+    }
+
+    /// <summary>
+    /// Full path to a System32 tool. An elevated process must never resolve an executable by
+    /// bare name: CreateProcess searches the application directory before System32, so a
+    /// planted schtasks.exe next to Sweep.exe would run with the admin token.
+    /// </summary>
+    public static string SystemExecutable(string fileName)
+    {
+        string system32 = Path.Combine(Environment.SystemDirectory, fileName);
+        if (File.Exists(system32))
         {
-            if (buf != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(buf);
-            }
+            return system32;
+        }
+
+        // A few built-ins (regedit, for one) live in the Windows directory rather than System32.
+        string windows = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows), fileName);
+        return File.Exists(windows) ? windows : system32;
+    }
+
+    /// <summary>Windows PowerShell, whose real home is System32\WindowsPowerShell\v1.0.</summary>
+    public static string PowerShellExecutable
+    {
+        get
+        {
+            string path = Path.Combine(
+                Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
+            return File.Exists(path) ? path : SystemExecutable("powershell.exe");
         }
     }
 

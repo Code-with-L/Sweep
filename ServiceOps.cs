@@ -107,13 +107,21 @@ internal static class ServiceOps
                 return false;
             }
 
-            var status = new SERVICE_STATUS();
-            if (!QueryServiceStatusEx(service, 0, ref status, Marshal.SizeOf<SERVICE_STATUS>()))
+            // SC_STATUS_PROCESS_INFO requires SERVICE_STATUS_PROCESS (36 bytes), not the
+            // 28-byte SERVICE_STATUS: the smaller buffer fails with ERROR_INSUFFICIENT_BUFFER
+            // and made this method report "not running" for every service.
+            var status = new SERVICE_STATUS_PROCESS();
+            if (!QueryServiceStatusEx(
+                    service,
+                    0,
+                    ref status,
+                    Marshal.SizeOf<SERVICE_STATUS_PROCESS>(),
+                    out _))
             {
                 return false;
             }
 
-            return status.dwCurrentState is 1 or 2 or 3 or 4;
+            return status.dwCurrentState == ServiceRunning;
         }
         catch
         {
@@ -133,8 +141,10 @@ internal static class ServiceOps
         }
     }
 
+    private const uint ServiceRunning = 4;
+
     [StructLayout(LayoutKind.Sequential)]
-    private struct SERVICE_STATUS
+    private struct SERVICE_STATUS_PROCESS
     {
         public uint dwServiceType;
         public uint dwCurrentState;
@@ -143,10 +153,16 @@ internal static class ServiceOps
         public uint dwServiceSpecificExitCode;
         public uint dwCheckPoint;
         public uint dwWaitHint;
+        public uint dwProcessId;
+        public uint dwServiceFlags;
     }
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryServiceStatusEx(
-        IntPtr service, int infoLevel, ref SERVICE_STATUS buffer, int bufferSize);
+        IntPtr service,
+        int infoLevel,
+        ref SERVICE_STATUS_PROCESS buffer,
+        int bufferSize,
+        out int bytesNeeded);
 }
