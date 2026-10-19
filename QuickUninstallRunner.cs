@@ -223,14 +223,15 @@ internal sealed class QuickUninstallRunner
     /// </summary>
     private static bool IsSafeToRemove(ResidueItem item)
     {
-        if (item.Confidence > Confidence.Moderate)
+        // The deny-list is the final backstop, not something the unattended path may skip.
+        // Relying on a "protected" word in Note would silently stop working the moment a
+        // scanner changes its wording.
+        if (Safety.IsHardBlocked(item))
         {
             return false;
         }
 
-        // Anything the scanner itself flagged is off-limits regardless of confidence.
-        if (!string.IsNullOrEmpty(item.Note) &&
-            item.Note.Contains("protected", StringComparison.OrdinalIgnoreCase))
+        if (item.Confidence > Confidence.Moderate)
         {
             return false;
         }

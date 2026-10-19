@@ -33,8 +33,15 @@ public static class ProcessHunter
                 continue;
             }
 
-            bool matches =
-                (installLocation is not null && path.StartsWith(installLocation, StringComparison.OrdinalIgnoreCase)) ||
+            // The separator matters: a bare prefix test makes "App" match "AppStudio" and
+            // kills processes that belong to a different product.
+            bool inInstallFolder = installLocation is not null &&
+                (string.Equals(path, installLocation, StringComparison.OrdinalIgnoreCase) ||
+                 path.StartsWith(
+                     installLocation + Path.DirectorySeparatorChar,
+                     StringComparison.OrdinalIgnoreCase));
+
+            bool matches = inInstallFolder ||
                 (exe is not null && string.Equals(path, exe, StringComparison.OrdinalIgnoreCase));
 
             if (!matches)

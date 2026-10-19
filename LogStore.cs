@@ -57,9 +57,16 @@ public static class LogStore
 
     public static void ClearRecent() => Recent.Clear();
 
+    /// <summary>
+    /// Registry-provided names may contain CR/LF. Left alone they forge whole lines in the
+    /// activity log, which is the audit record for destructive actions.
+    /// </summary>
+    private static string Sanitize(string message) =>
+        message.Replace('\r', ' ').Replace('\n', ' ');
+
     private static void Write(LogLevel level, string message)
     {
-        var entry = new LogEntry(DateTime.Now, level, message);
+        var entry = new LogEntry(DateTime.Now, level, Sanitize(message));
 
         // Bound memory: keep the most recent 500 entries.
         Recent.Enqueue(entry);

@@ -57,9 +57,16 @@ public static class Removal
     {
         return item.Target switch
         {
-            FileTarget file => quarantine is not null && item.Kind != ResidueKind.Shortcut
-                ? quarantine.QuarantineFile(file.Path)
-                : FileOps.DeleteFile(file.Path),
+            // Files and folders share FileTarget, so the item's kind decides which primitive
+            // runs. Handing a directory to File.Delete silently succeeds without doing
+            // anything, which is why leftovers used to "vanish" from the list and stay on disk.
+            FileTarget file => item.Kind == ResidueKind.Folder
+                ? (quarantine is not null
+                    ? quarantine.QuarantineDirectory(file.Path)
+                    : FileOps.DeleteDirectory(file.Path))
+                : (quarantine is not null && item.Kind != ResidueKind.Shortcut
+                    ? quarantine.QuarantineFile(file.Path)
+                    : FileOps.DeleteFile(file.Path)),
 
             RegistryKeyTarget key => RegistryResidueOps.DeleteKey(key.Location),
 
@@ -97,7 +104,7 @@ public static class Removal
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "schtasks.exe",
+                FileName = Native.SystemExecutable("schtasks.exe"),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,

@@ -373,15 +373,26 @@ public sealed class Quarantine
 
         Directory.CreateDirectory(destination);
 
+        // Preserve the shape of the tree. Flattening by file name made two same-named files
+        // in different subfolders overwrite each other, and the manifest then described a
+        // restore that could not put the original content back.
+        string root = Path.GetFullPath(source).TrimEnd('\\');
+
         foreach (string dir in Directory.EnumerateDirectories(source, "*", options))
         {
-            Directory.CreateDirectory(Path.Combine(destination, Path.GetFileName(dir)));
+            Directory.CreateDirectory(
+                Path.Combine(destination, Path.GetRelativePath(root, dir)));
         }
 
         foreach (string file in Directory.EnumerateFiles(source, "*", options))
         {
-            string target = Path.Combine(destination, Path.GetFileName(file));
-            File.Copy(file, target, overwrite: true);
+            string target = Path.Combine(destination, Path.GetRelativePath(root, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+
+            // Never overwrite: a collision means the copy is incomplete, not that one file
+            // should win silently.
+            File.Copy(file, target, overwrite: false);
+
             var info = new FileInfo(target);
             if (info.IsReadOnly)
             {
@@ -413,10 +424,57 @@ public sealed class Quarantine
 
     public int Count => _entries.Count;
 
+    /// <summary>The two places a quarantine session may live.</summary>
+    private static IReadOnlyList<string> BaseDirectories() =>
+    [
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Sweep", "Quarantine"),
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Sweep", "Quarantine"),
+    ];
+
+    /// <summary>
+    /// True when the session really sits under one of Sweep's quarantine roots.
+    ///
+    /// A manifest is untrusted input: without this check, a hand-written manifest anywhere on
+    /// disk turns "Restore" into an arbitrary file move with the Administrator token.
+    /// </summary>
+    public static bool IsTrustedSession(string quarantineRoot)
+    {
+        try
+        {
+            string full = Path.GetFullPath(quarantineRoot).TrimEnd('\\');
+            foreach (string baseDir in BaseDirectories())
+            {
+                string root = Path.GetFullPath(baseDir).TrimEnd('\\');
+                if (full.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase) &&
+                    full.Length > root.Length + 1)
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // Malformed path.
+        }
+
+        return false;
+    }
+
     /// <summary>Reverses a previous quarantine operation.</summary>
     public static int RestoreFrom(string quarantineRoot)
     {
-        string manifest = Path.Combine(quarantineRoot, "manifest.json");
+        if (!IsTrustedSession(quarantineRoot))
+        {
+            throw new InvalidOperationException(
+                "That folder is not a Sweep quarantine session, so it will not be restored.");
+        }
+
+        string root = Path.GetFullPath(quarantineRoot).TrimEnd('\\');
+        string manifest = Path.Combine(root, "manifest.json");
         if (!File.Exists(manifest))
         {
             throw new FileNotFoundException("No quarantine manifest found.", manifest);
@@ -429,15 +487,30 @@ public sealed class Quarantine
         {
             try
             {
+                // Both halves of the move must be legitimate: the stored copy has to live
+                // inside this session, and the destination must not be a protected location.
+                string stored = Path.GetFullPath(entry.Stored);
+                if (!stored.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogStore.Warn($"Ignored quarantine entry pointing outside the session: {entry.Stored}");
+                    continue;
+                }
+
+                if (Safety.IsProtectedLocation(entry.Original))
+                {
+                    LogStore.Warn($"Ignored quarantine entry targeting a protected location: {entry.Original}");
+                    continue;
+                }
+
                 if (!Directory.Exists(entry.Original) && !File.Exists(entry.Original))
                 {
                     if (entry.IsDirectory)
                     {
-                        Directory.Move(entry.Stored, entry.Original);
+                        Directory.Move(stored, entry.Original);
                     }
                     else
                     {
-                        File.Move(entry.Stored, entry.Original);
+                        File.Move(stored, entry.Original);
                     }
 
                     restored++;
@@ -470,25 +543,31 @@ public sealed class Quarantine
         }
     }
 
+    /// <summary>The first quarantine root that currently exists, for "open folder".</summary>
+    public static string? ExistingBaseDirectory =>
+        BaseDirectories().FirstOrDefault(Directory.Exists);
+
     public static IReadOnlyList<string> ListQuarantineRoots()
     {
-        string baseDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "Sweep",
-            "Quarantine");
+        var roots = new List<string>();
 
-        if (!Directory.Exists(baseDir))
+        foreach (string baseDir in BaseDirectories())
         {
-            return [];
+            if (!Directory.Exists(baseDir))
+            {
+                continue;
+            }
+
+            try
+            {
+                roots.AddRange(Directory.EnumerateDirectories(baseDir));
+            }
+            catch
+            {
+                // Unreadable root - skip it rather than losing the other one.
+            }
         }
 
-        try
-        {
-            return Directory.EnumerateDirectories(baseDir).OrderByDescending(d => d).ToList();
-        }
-        catch
-        {
-            return [];
-        }
+        return roots.OrderByDescending(d => d).ToList();
     }
 }
