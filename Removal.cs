@@ -82,6 +82,14 @@ public static class Removal
 
     private static DeletionResult DeleteService(string name)
     {
+        // The SCM has to be told. Deleting only the registry key leaves the cached service
+        // entry in place, so it keeps showing up until the next restart.
+        if (ServiceOps.Delete(name, out string scmError))
+        {
+            return new DeletionResult(true, name, false, null);
+        }
+
+        // An orphaned key with no SCM entry is still cleanup worth doing.
         try
         {
             using var root = Microsoft.Win32.RegistryKey.OpenBaseKey(
@@ -94,7 +102,7 @@ public static class Removal
         }
         catch (Exception ex)
         {
-            return new DeletionResult(false, name, false, ex.Message);
+            return new DeletionResult(false, name, false, $"{scmError}; registry: {ex.Message}");
         }
     }
 

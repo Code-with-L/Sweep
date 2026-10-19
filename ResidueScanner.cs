@@ -164,8 +164,8 @@ public sealed class ResidueScanner
             }
         }
 
-        Add(() => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 3, true, "Local AppData");
-        Add(() => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), 3, true, "Roaming AppData");
+        Add(LocalAppDataPath, 3, true, "Local AppData");
+        Add(RoamingAppDataPath, 3, true, "Roaming AppData");
         Add(() => Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), 3, true, "ProgramData");
         Add(() => Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), 2, true, "Program Files");
         Add(() => Native.ProgramFilesX86, 2, true, "Program Files (x86)");
@@ -178,6 +178,26 @@ public sealed class ResidueScanner
 
         return roots;
     }
+
+    /// <summary>
+    /// The invoker's AppData when elevation changed the account, otherwise this process's.
+    /// Without this the scan would search the administrator's profile and propose their
+    /// files as the uninstalled program's leftovers.
+    /// </summary>
+    private static string LocalAppDataPath() =>
+        RunContext.IsCrossUser
+            ? ProfileSubdirectory("Local")
+            : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+    private static string RoamingAppDataPath() =>
+        RunContext.IsCrossUser
+            ? ProfileSubdirectory("Roaming")
+            : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+    private static string ProfileSubdirectory(string name) =>
+        RunContext.EffectiveProfile is { Length: > 0 } profile
+            ? Path.Combine(profile, "AppData", name)
+            : string.Empty;
 
     public Task<List<ResidueItem>> ScanAsync(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
     {
@@ -657,13 +677,24 @@ private bool TryReserve(string path, int cap, ref int counter)
 
     private sealed record RegRoot(RegistryHive Hive, RegistryView View, string Path, int Depth, bool AllowWeak, string Label);
 
-    private static IReadOnlyList<RegRoot> RegistryRoots(int uninstallDepth) =>
-    [
-        new(RegistryHive.CurrentUser, RegistryView.Registry64, "Software", 3, true, "HKCU\\Software"),
-        new(RegistryHive.CurrentUser, RegistryView.Registry64, @"Software\Classes", 2, true, "HKCU file associations"),
-        new(RegistryHive.LocalMachine, RegistryView.Registry64, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (64)"),
-        new(RegistryHive.LocalMachine, RegistryView.Registry32, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (32)"),
-    ];
+    private static IReadOnlyList<RegRoot> RegistryRoots(int uninstallDepth)
+    {
+        var roots = new List<RegRoot>
+        {
+            new(RegistryHive.LocalMachine, RegistryView.Registry64, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (64)"),
+            new(RegistryHive.LocalMachine, RegistryView.Registry32, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (32)"),
+        };
+
+        // HKCU under a different elevated account is the administrator's hive, not the
+        // invoker's. Scanning it would report and delete the wrong user's keys.
+        if (!RunContext.IsCrossUser)
+        {
+            roots.Add(new(RegistryHive.CurrentUser, RegistryView.Registry64, "Software", 3, true, "HKCU\\Software"));
+            roots.Add(new(RegistryHive.CurrentUser, RegistryView.Registry64, @"Software\Classes", 2, true, "HKCU file associations"));
+        }
+
+        return roots;
+    }
 
 private void ScanRegistry(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
     {

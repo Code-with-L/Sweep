@@ -126,6 +126,9 @@ internal sealed class ResidueForm : ThemedForm
         _list.Columns.Add("Matched on", 100);
         _list.Columns.Add("Path", 440);
 
+        LayoutColumns();
+        _list.SizeChanged += (_, _) => LayoutColumns();
+
         _list.ColumnClick += (_, e) =>
         {
             if (_list.Items.Count == 0)
@@ -159,6 +162,41 @@ internal sealed class ResidueForm : ThemedForm
     }
 
     private int _lastSortColumn = -1;
+
+    /// <summary>
+    /// Column widths are device pixels, but the caption font grows with DPI, so a fixed
+    /// 96px width clips "Confidence" at 125-150%. Measure every caption and give the Path
+    /// column whatever is left instead of letting a horizontal scrollbar appear.
+    /// </summary>
+    private void LayoutColumns()
+    {
+        if (_list.Columns.Count < 6)
+        {
+            return;
+        }
+
+        int Measured(int index, int minimum)
+        {
+            int text = TextRenderer.MeasureText(_list.Columns[index].Text, _list.Font).Width;
+            return Math.Max(minimum, text + 30);
+        }
+
+        int type = Measured(0, 100);
+        int name = Measured(1, 170);
+        int size = Measured(2, 80);
+        int confidence = Measured(3, 104);
+        int matched = Measured(4, 100);
+
+        int chrome = SystemInformation.VerticalScrollBarWidth + 8;
+        int path = Math.Max(240, _list.ClientSize.Width - type - name - size - confidence - matched - chrome);
+
+        _list.Columns[0].Width = type;
+        _list.Columns[1].Width = name;
+        _list.Columns[2].Width = size;
+        _list.Columns[3].Width = confidence;
+        _list.Columns[4].Width = matched;
+        _list.Columns[5].Width = path;
+    }
 
     private Panel BuildBottomBar()
     {

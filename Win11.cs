@@ -17,6 +17,9 @@ internal static class Win11
     internal const int HtMaxButton = 2;
 
     private const int DwmwaUseImmersiveDarkMode = 20;
+
+    // Windows 10 builds before 20H1 only understand the attribute under its old number.
+    private const int DwmwaUseImmersiveDarkModeLegacy = 19;
     private const int DwmwaWindowCornerPreference = 33;
     private const int DwmwaCaptionColor = 35;
     private const int DwmwaTextColor = 36;
@@ -58,7 +61,16 @@ internal static class Win11
         // the dark title bar do apply, so a mismatched title bar on the light theme is a
         // known cosmetic limitation rather than a bug to keep chasing.
         TrySetDwm(form.Handle, DwmwaSystemBackdropType, backdrop);
-        TrySetDwm(form.Handle, DwmwaUseImmersiveDarkMode, dark0);
+
+        // 20 is ignored (not just rejected) on some builds, which left a white caption over
+        // a dark window. Asking under the legacy number as well is harmless on builds that
+        // already honoured the first call.
+        int darkHr = TrySetDwm(form.Handle, DwmwaUseImmersiveDarkMode, dark0);
+        if (darkHr != 0)
+        {
+            TrySetDwm(form.Handle, DwmwaUseImmersiveDarkModeLegacy, dark0);
+        }
+
         TrySetDwm(form.Handle, DwmwaWindowCornerPreference, corners);
         TrySetDwm(form.Handle, DwmwaCaptionColor, caption);
         TrySetDwm(form.Handle, DwmwaTextColor, text);

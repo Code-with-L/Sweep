@@ -88,6 +88,65 @@ internal static class ServiceOps
         }
     }
 
+    /// <summary>
+    /// Removes a service through the SCM. Deleting the registry key alone leaves the SCM's
+    /// cached entry in place until the next boot, so the service still appears to exist.
+    /// </summary>
+    public static bool Delete(string serviceName, out string error)
+    {
+        error = string.Empty;
+        IntPtr manager = IntPtr.Zero;
+        IntPtr service = IntPtr.Zero;
+
+        try
+        {
+            manager = OpenSCManager(null, null, ScManagerAllAccess);
+            if (manager == IntPtr.Zero)
+            {
+                error = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return false;
+            }
+
+            service = OpenService(
+                manager, serviceName, ServiceStop | ServiceQueryStatus | ServiceDelete);
+            if (service == IntPtr.Zero)
+            {
+                error = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return false;
+            }
+
+            // Best effort: a service that refuses to stop can still be marked for deletion,
+            // which happens on the next boot.
+            var status = new SERVICE_STATUS();
+            ControlService(service, ServiceControlStop, ref status);
+
+            if (!DeleteService(service))
+            {
+                error = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+        finally
+        {
+            if (service != IntPtr.Zero)
+            {
+                CloseServiceHandle(service);
+            }
+
+            if (manager != IntPtr.Zero)
+            {
+                CloseServiceHandle(manager);
+            }
+        }
+    }
+
     public static bool IsRunning(string serviceName)
     {
         IntPtr manager = IntPtr.Zero;
@@ -142,6 +201,32 @@ internal static class ServiceOps
     }
 
     private const uint ServiceRunning = 4;
+
+    private const int ServiceQueryStatus = 0x0004;
+    private const int ServiceStop = 0x0020;
+    private const int ServiceDelete = 0x00010000;
+    private const int ServiceControlStop = 0x00000001;
+
+    /// <summary>SERVICE_STATUS, which ControlService takes (not SERVICE_STATUS_PROCESS).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SERVICE_STATUS
+    {
+        public uint dwServiceType;
+        public uint dwCurrentState;
+        public uint dwControlsAccepted;
+        public uint dwWin32ExitCode;
+        public uint dwServiceSpecificExitCode;
+        public uint dwCheckPoint;
+        public uint dwWaitHint;
+    }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ControlService(IntPtr service, int control, ref SERVICE_STATUS status);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeleteService(IntPtr service);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SERVICE_STATUS_PROCESS

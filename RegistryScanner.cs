@@ -16,6 +16,7 @@ public static class RegistryScanner
         (RegistryHive.LocalMachine, RegistryView.Registry64, "Machine 64"),
         (RegistryHive.LocalMachine, RegistryView.Registry32, "Machine 32"),
         (RegistryHive.CurrentUser, RegistryView.Registry64, "User 64"),
+        (RegistryHive.CurrentUser, RegistryView.Registry32, "User 32"),
     ];
 
     private static readonly HashSet<string> UpdatePrefixes = new(StringComparer.OrdinalIgnoreCase)
@@ -38,6 +39,14 @@ public static class RegistryScanner
         foreach (var (hive, view, _) in Sources)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Under over-the-shoulder elevation HKCU belongs to the administrator at the UAC
+            // prompt, not to the user who launched Sweep. Listing their programs as the
+            // invoker's - and offering them for removal - would be wrong, so skip the hive.
+            if (hive == RegistryHive.CurrentUser && RunContext.IsCrossUser)
+            {
+                continue;
+            }
 
             RegistryKey root;
             try
