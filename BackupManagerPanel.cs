@@ -60,8 +60,8 @@ internal sealed class BackupManagerPanel : Panel
             Theme.StyleButton(button, p);
         }
 
-        Theme.StyleButton(_restore, p, primary: true);
-
+        // Deliberately not the "primary" style: with no backup selected the button is
+        // disabled, and a bright blue disabled button still reads as clickable.
         _restore.Click += async (_, _) => await RestoreAsync();
         _open.Click += (_, _) => OpenFolder();
         _delete.Click += async (_, _) => await DeleteAsync();
@@ -313,14 +313,12 @@ internal sealed class BackupManagerPanel : Panel
         {
             return;
         }
-
-        int chrome = SystemInformation.VerticalScrollBarWidth + 8;
         int fixedWidth =
             _list.Columns[0].Width +
             _list.Columns[1].Width +
             _list.Columns[2].Width +
             _list.Columns[3].Width;
 
-        _list.Columns[4].Width = Math.Max(240, _list.ClientSize.Width - fixedWidth - chrome);
+        _list.Columns[4].Width = Math.Max(240, _list.ClientSize.Width - fixedWidth );
     }
 }

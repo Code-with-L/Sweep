@@ -278,8 +278,6 @@ internal sealed class JunkPanel : Panel
             MessageBox.Show(this, message.ToString(), "Sweep - Junk Files Cleaner",
                 MessageBoxButtons.OK,
                 result.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
-
-            await ScanAsync();
         }
         catch (Exception ex)
         {
@@ -294,6 +292,10 @@ internal sealed class JunkPanel : Panel
             _scan.Enabled = true;
             _clean.Enabled = true;
         }
+
+        // After the busy flag is clear: ScanAsync returns immediately while it is set, which
+        // is why the list used to keep showing the sizes from before the clean.
+        await ScanAsync();
     }
 
     private void FitColumns()
@@ -302,9 +304,7 @@ internal sealed class JunkPanel : Panel
         {
             return;
         }
-
-        int chrome = SystemInformation.VerticalScrollBarWidth + 8;
         int fixedWidth = _list.Columns[0].Width + _list.Columns[1].Width + _list.Columns[2].Width;
-        _list.Columns[3].Width = Math.Max(240, _list.ClientSize.Width - fixedWidth - chrome);
+        _list.Columns[3].Width = Math.Max(240, _list.ClientSize.Width - fixedWidth );
     }
 }

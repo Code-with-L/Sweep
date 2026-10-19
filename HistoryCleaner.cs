@@ -87,8 +87,8 @@ public static class HistoryCleaner
 
     private static void AddRecentItems(List<HistoryGroup> groups, CancellationToken cancellationToken)
     {
-        string recent = Environment.GetFolderPath(Environment.SpecialFolder.Recent);
-        if (!Directory.Exists(recent))
+        string recent = UserFolders.Recent;
+        if (recent.Length == 0 || !Directory.Exists(recent))
         {
             return;
         }

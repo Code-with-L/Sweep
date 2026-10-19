@@ -102,6 +102,7 @@ internal sealed class TracedProgramsPanel : Panel
 
         _status.Text = "No trace yet.";
         FitColumns();
+        UpdateButtons();
     }
 
     private async Task TraceAsync()
@@ -454,14 +455,12 @@ internal sealed class TracedProgramsPanel : Panel
         {
             return;
         }
-
-        int chrome = SystemInformation.VerticalScrollBarWidth + 8;
         int fixedWidth =
             _list.Columns[0].Width +
             _list.Columns[1].Width +
             _list.Columns[2].Width +
             _list.Columns[3].Width;
 
-        _list.Columns[4].Width = Math.Max(220, _list.ClientSize.Width - fixedWidth - chrome);
+        _list.Columns[4].Width = Math.Max(220, _list.ClientSize.Width - fixedWidth );
     }
 }

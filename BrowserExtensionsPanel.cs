@@ -335,8 +335,6 @@ internal sealed class BrowserExtensionsPanel : Panel
         {
             return;
         }
-
-        int chrome = SystemInformation.VerticalScrollBarWidth + 8;
         int fixedWidth =
             _list.Columns[0].Width +
             _list.Columns[1].Width +
@@ -344,6 +342,6 @@ internal sealed class BrowserExtensionsPanel : Panel
             _list.Columns[3].Width +
             _list.Columns[4].Width;
 
-        _list.Columns[5].Width = Math.Max(220, _list.ClientSize.Width - fixedWidth - chrome);
+        _list.Columns[5].Width = Math.Max(220, _list.ClientSize.Width - fixedWidth );
     }
 }

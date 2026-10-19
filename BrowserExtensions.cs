@@ -57,7 +57,11 @@ public static class BrowserExtensions
 
     private static IEnumerable<(string Browser, string UserData)> ChromiumBrowsers()
     {
-        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string local = UserFolders.LocalAppData;
+        if (local.Length == 0)
+        {
+            yield break;
+        }
 
         yield return ("Chrome", Path.Combine(local, "Google", "Chrome", "User Data"));
         yield return ("Edge", Path.Combine(local, "Microsoft", "Edge", "User Data"));
@@ -162,9 +166,13 @@ public static class BrowserExtensions
 
     private static void ScanFirefox(List<BrowserExtension> results, CancellationToken cancellationToken)
     {
-        string profilesRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Mozilla", "Firefox", "Profiles");
+        string roaming = UserFolders.Roaming;
+        if (roaming.Length == 0)
+        {
+            return;
+        }
+
+        string profilesRoot = Path.Combine(roaming, "Mozilla", "Firefox", "Profiles");
 
         if (!Directory.Exists(profilesRoot))
         {

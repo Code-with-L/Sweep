@@ -45,64 +45,67 @@ public static class JunkScanner
 
     public static IReadOnlyList<JunkGroup> Locations()
     {
-        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string local = UserFolders.LocalAppData;
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        string temp = UserFolders.Temp;
 
-        return
-        [
-            new JunkGroup
+        var locations = new List<JunkGroup>();
+
+        if (temp.Length > 0)
+        {
+            locations.Add(new JunkGroup
             {
                 Name = "User temporary files",
-                Path = UserTemp(),
+                Path = temp,
                 Detail = "Files applications left in this user's temp folder.",
-            },
-            new JunkGroup
-            {
-                Name = "Windows temporary files",
-                Path = Path.Combine(windows, "Temp"),
-                Detail = "Machine-wide temp folder. Needs administrator rights.",
-                NeedsElevation = true,
-            },
-            new JunkGroup
+            });
+        }
+
+        locations.Add(new JunkGroup
+        {
+            Name = "Windows temporary files",
+            Path = Path.Combine(windows, "Temp"),
+            Detail = "Machine-wide temp folder. Needs administrator rights.",
+            NeedsElevation = true,
+        });
+
+        // Everything below is under the invoker's LocalAppData. With no profile to use (a
+        // different admin at the UAC prompt and no profile path passed) there is nothing
+        // per-user to measure, and Path.Combine("", ...) must not become a relative path.
+        if (local.Length > 0)
+        {
+            locations.Add(new JunkGroup
             {
                 Name = "Crash dumps",
                 Path = Path.Combine(local, "CrashDumps"),
                 Detail = "Dumps written when an application crashed.",
-            },
-            new JunkGroup
+            });
+
+            locations.Add(new JunkGroup
             {
                 Name = "Legacy internet cache",
                 Path = Path.Combine(local, "Microsoft", "Windows", "INetCache"),
                 Detail = "Cache used by Windows components and older browsers.",
-            },
-            new JunkGroup
+            });
+
+            locations.Add(new JunkGroup
             {
                 Name = "Direct3D shader cache",
                 Path = Path.Combine(local, "D3DSCache"),
                 Detail = "Compiled shader blobs, rebuilt the next time a game runs.",
-            },
-            new JunkGroup
+            });
+
+            locations.Add(new JunkGroup
             {
                 Name = "Thumbnail cache",
                 Path = Path.Combine(local, "Microsoft", "Windows", "Explorer"),
                 Pattern = "thumbcache_*.db",
                 Recursive = false,
                 Detail = "Explorer thumbnail databases. Windows rebuilds them as needed.",
-            },
-        ];
-    }
-
-    /// <summary>
-    /// The invoker's temp folder under over-the-shoulder elevation, otherwise this user's.
-    /// </summary>
-    private static string UserTemp()
-    {
-        if (RunContext.IsCrossUser && RunContext.EffectiveProfile is { Length: > 0 } profile)
-        {
-            return Path.Combine(profile, "AppData", "Local", "Temp");
+            });
         }
 
-        return Path.GetTempPath().TrimEnd('\\');
+        return locations;
     }
 
     public static IReadOnlyList<JunkGroup> Scan(

@@ -362,11 +362,9 @@ internal sealed class HistoryCleanerPanel : Panel
         {
             return;
         }
-
-        int chrome = SystemInformation.VerticalScrollBarWidth + 8;
         int fixedWidth =
             _list.Columns[0].Width + _list.Columns[1].Width + _list.Columns[2].Width;
 
-        _list.Columns[3].Width = Math.Max(240, _list.ClientSize.Width - fixedWidth - chrome);
+        _list.Columns[3].Width = Math.Max(240, _list.ClientSize.Width - fixedWidth );
     }
 }

@@ -277,14 +277,21 @@ BuildMenu();
         var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 9, 12, 9) };
         panel.BackColor = Theme.Current.Surface;
 
-        var layout = new FlowLayoutPanel
+        // A table, not a right-to-left flow: the flow placed the label past the right edge at
+        // narrower window widths and the module name was clipped to "Junk Fi".
+        var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.RightToLeft,
-            WrapContents = false,
+            ColumnCount = 2,
+            RowCount = 1,
             BackColor = Theme.Current.Surface,
             Margin = Padding.Empty,
+            Padding = Padding.Empty,
         };
+
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _toolBadge = new Label
         {
@@ -299,7 +306,7 @@ BuildMenu();
         _toolModuleLabel = new Label
         {
             AutoSize = false,
-            Width = 320,
+            Dock = DockStyle.Fill,
             Height = 30,
             TextAlign = ContentAlignment.MiddleRight,
             ForeColor = Theme.Current.TextDim,
@@ -307,8 +314,10 @@ BuildMenu();
             Padding = new Padding(0, 0, 4, 0),
         };
 
-        layout.Controls.Add(_toolBadge);
-        layout.Controls.Add(_toolModuleLabel);
+        _toolBadge.Anchor = AnchorStyles.Right;
+
+        layout.Controls.Add(_toolModuleLabel, 0, 0);
+        layout.Controls.Add(_toolBadge, 1, 0);
         panel.Controls.Add(layout);
         UpdateToolToolbar();
         return panel;
@@ -1590,6 +1599,14 @@ try
 
     private void UpdateSelection()
     {
+        if (_currentModule != "programs")
+        {
+            // The selection bar belongs to the program list. Leaving the last program's
+            // description under a Tools module reads as if it described that module.
+            _selectionInfo.Text = string.Empty;
+            return;
+        }
+
         var app = SelectedApp();
 
         // More than one row selected means the reviewed single-program flow no longer applies, so

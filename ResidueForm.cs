@@ -186,9 +186,7 @@ internal sealed class ResidueForm : ThemedForm
         int size = Measured(2, 80);
         int confidence = Measured(3, 104);
         int matched = Measured(4, 100);
-
-        int chrome = SystemInformation.VerticalScrollBarWidth + 8;
-        int path = Math.Max(240, _list.ClientSize.Width - type - name - size - confidence - matched - chrome);
+        int path = Math.Max(240, _list.ClientSize.Width - type - name - size - confidence - matched );
 
         _list.Columns[0].Width = type;
         _list.Columns[1].Width = name;

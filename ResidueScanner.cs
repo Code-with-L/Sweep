@@ -164,8 +164,8 @@ public sealed class ResidueScanner
             }
         }
 
-        Add(LocalAppDataPath, 3, true, "Local AppData");
-        Add(RoamingAppDataPath, 3, true, "Roaming AppData");
+        Add(() => UserFolders.LocalAppData, 3, true, "Local AppData");
+        Add(() => UserFolders.Roaming, 3, true, "Roaming AppData");
         Add(() => Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), 3, true, "ProgramData");
         Add(() => Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), 2, true, "Program Files");
         Add(() => Native.ProgramFilesX86, 2, true, "Program Files (x86)");
@@ -178,26 +178,6 @@ public sealed class ResidueScanner
 
         return roots;
     }
-
-    /// <summary>
-    /// The invoker's AppData when elevation changed the account, otherwise this process's.
-    /// Without this the scan would search the administrator's profile and propose their
-    /// files as the uninstalled program's leftovers.
-    /// </summary>
-    private static string LocalAppDataPath() =>
-        RunContext.IsCrossUser
-            ? ProfileSubdirectory("Local")
-            : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-
-    private static string RoamingAppDataPath() =>
-        RunContext.IsCrossUser
-            ? ProfileSubdirectory("Roaming")
-            : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-
-    private static string ProfileSubdirectory(string name) =>
-        RunContext.EffectiveProfile is { Length: > 0 } profile
-            ? Path.Combine(profile, "AppData", name)
-            : string.Empty;
 
     public Task<List<ResidueItem>> ScanAsync(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
     {
