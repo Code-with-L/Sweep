@@ -246,8 +246,12 @@ internal sealed class NavRail : Panel
     [
         new("programs", "All Programs", "Uninstaller", ModuleIcons.Glyph.Programs,
             "All installed programs and components, for the current user and for every user on the machine, grouped into recently installed and the rest."),
+        new("traced", "Traced Programs", "Uninstaller", ModuleIcons.Glyph.Traced,
+            "Run an installer once and see the folders and registry keys it added. The changes can be quarantined in one step."),
         new("apps", "Windows Apps", "Uninstaller", ModuleIcons.Glyph.Store,
             "Store and packaged apps, including provisioning. Some can be reset to their shipped state instead of removed outright."),
+        new("extensions", "Browser Extensions", "Uninstaller", ModuleIcons.Glyph.Extension,
+            "Add-ons installed in Chrome, Edge, Brave, Vivaldi and Firefox profiles. Chromium extensions can be moved to quarantine; Firefox entries are managed in the browser."),
         new("hunter", "Hunter Mode", "Uninstaller", ModuleIcons.Glyph.Hunter,
             "Shows every running process with its executable and install folder, so you can see what a stubborn program is actually doing before killing it."),
         new("autorun", "Autorun Manager", "Tools", ModuleIcons.Glyph.Autorun,
@@ -256,6 +260,8 @@ internal sealed class NavRail : Panel
             "Temporary files, crash dumps, thumbnail and shader caches, with the total shown before anything is deleted."),
         new("wintools", "Windows Tools", "Tools", ModuleIcons.Glyph.Tools,
             "The built-in Windows utilities, grouped by what they are for, each with its command line shown so you can reuse it. Add your own."),
+        new("history", "History Cleaner", "Tools", ModuleIcons.Glyph.History,
+            "Browser history stores and the Windows recent-items list, moved to quarantine so an accidental clean can be undone."),
         new("backup", "Backup Manager", "Tools", ModuleIcons.Glyph.Backup,
             "Quarantine sessions taken before removals: what each one holds, when it was made, and a button to put it back."),
     ];
