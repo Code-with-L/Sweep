@@ -463,7 +463,7 @@ internal sealed class AutorunPanel : Panel
         {
             var psi = new System.Diagnostics.ProcessStartInfo
             {
-                FileName = "schtasks.exe",
+                FileName = Native.SystemExecutable("schtasks.exe"),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,

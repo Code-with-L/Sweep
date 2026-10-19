@@ -164,8 +164,8 @@ public sealed class ResidueScanner
             }
         }
 
-        Add(() => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 3, true, "Local AppData");
-        Add(() => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), 3, true, "Roaming AppData");
+        Add(() => UserFolders.LocalAppData, 3, true, "Local AppData");
+        Add(() => UserFolders.Roaming, 3, true, "Roaming AppData");
         Add(() => Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), 3, true, "ProgramData");
         Add(() => Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), 2, true, "Program Files");
         Add(() => Native.ProgramFilesX86, 2, true, "Program Files (x86)");
@@ -657,13 +657,24 @@ private bool TryReserve(string path, int cap, ref int counter)
 
     private sealed record RegRoot(RegistryHive Hive, RegistryView View, string Path, int Depth, bool AllowWeak, string Label);
 
-    private static IReadOnlyList<RegRoot> RegistryRoots(int uninstallDepth) =>
-    [
-        new(RegistryHive.CurrentUser, RegistryView.Registry64, "Software", 3, true, "HKCU\\Software"),
-        new(RegistryHive.CurrentUser, RegistryView.Registry64, @"Software\Classes", 2, true, "HKCU file associations"),
-        new(RegistryHive.LocalMachine, RegistryView.Registry64, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (64)"),
-        new(RegistryHive.LocalMachine, RegistryView.Registry32, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (32)"),
-    ];
+    private static IReadOnlyList<RegRoot> RegistryRoots(int uninstallDepth)
+    {
+        var roots = new List<RegRoot>
+        {
+            new(RegistryHive.LocalMachine, RegistryView.Registry64, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (64)"),
+            new(RegistryHive.LocalMachine, RegistryView.Registry32, "SOFTWARE", uninstallDepth, false, "HKLM\\SOFTWARE (32)"),
+        };
+
+        // HKCU under a different elevated account is the administrator's hive, not the
+        // invoker's. Scanning it would report and delete the wrong user's keys.
+        if (!RunContext.IsCrossUser)
+        {
+            roots.Add(new(RegistryHive.CurrentUser, RegistryView.Registry64, "Software", 3, true, "HKCU\\Software"));
+            roots.Add(new(RegistryHive.CurrentUser, RegistryView.Registry64, @"Software\Classes", 2, true, "HKCU file associations"));
+        }
+
+        return roots;
+    }
 
 private void ScanRegistry(IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
     {

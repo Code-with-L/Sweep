@@ -97,6 +97,12 @@ only non-BCL dependency and it ships with the runtime.
 Program.cs           entry point, UAC self-elevation, diagnostic switches
 MainForm.cs          program list, filters, sorting, context menu, uninstall flow
 ResidueForm.cs       the leftover review pane
+JunkPanel.cs         Junk Files Cleaner: measure, select, delete
+JunkScanner.cs       the fixed list of disposable locations
+BackupManagerPanel.cs quarantine sessions, restore and delete
+BrowserExtensions.cs extension discovery for Chromium and Firefox profiles
+HistoryCleaner.cs    history stores and the Windows recent-items list
+TraceSnapshot.cs     before/after snapshot and diff for one installation
 AutorunForm.cs       startup entries / services / scheduled tasks
 WindowsAppsForm.cs   Store / MSIX apps
 
@@ -191,7 +197,19 @@ Sweep.exe --selftest --app Discord
   | Registry keys | `HKCU\Software`, `HKLM\SOFTWARE` in both WOW64 views |
 
 - **Rates every match** Safe / Moderate / Risky. Risky items start unchecked.
+- **Cleans disposable files**: user and Windows temp folders, crash dumps, legacy internet
+  cache, the Direct3D shader cache and Explorer's thumbnail databases. Every location is
+  measured first and nothing is deleted until you tick it; the folder roots stay, and files
+  in use are skipped rather than forced.
+- **Manages backups**: every quarantine session with its date, item count and size, from
+  where it can be restored or permanently deleted.
 - **Lists Store/MSIX apps**, which never appear in the uninstall registry keys.
+- **Traces an installation**: snapshot, run the installer, then list the folders and registry
+  keys it added, ready to quarantine in one step.
+- **Lists browser extensions** across Chrome, Edge, Brave, Vivaldi and Firefox profiles.
+  Chromium extensions can be moved to quarantine; Firefox's are managed in the browser.
+- **Cleans history**: browser history stores and the Windows recent-items list, moved to
+  quarantine rather than deleted.
 - **Manages startup entries**: disable services and tasks reversibly, open locations.
 - **Filters and sorts** by type, size, drive, and any column.
 - **Kills an app's running processes** before and after uninstall, matched by install
@@ -231,9 +249,14 @@ Additional limits, all deliberate:
   recorded locally in the activity log; there is no shared cloud log service.
 - **Registry matching is name-based**, so a third-party key containing the product name can
   be reported. That is why results are reviewed rather than deleted blindly.
-- **Browser extensions, add-ons and BHOs are not enumerated.** Reading a browser's
-  extension and preference stores safely needs per-profile parsing, and a mistake there
-  breaks the user's browser rather than leaving junk behind.
+- **Browser extensions are listed, but not all browsers are equal.** Chromium profiles
+  (Chrome, Edge, Brave, Vivaldi) and Firefox are read from their profile data; BHOs and
+  add-ons that do not register in those stores are not. Firefox extensions are read-only
+  here because Firefox keeps their state in a profile database, not in a folder.
+- **Traced Programs is a snapshot diff, not a filter driver.** It compares the machine
+  before and after the installer runs. Anything an installer writes and removes inside the
+  same run is invisible, and the diff covers new top-level folders and two levels of the
+  software registry rather than every file.
 - **MSI component/orphan analysis is not done.** `Win32_Product`-style queries trigger
   self-repair on every package they touch.
 - **Startup entries cannot be disabled**, only removed. Windows offers no supported

@@ -277,14 +277,21 @@ BuildMenu();
         var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 9, 12, 9) };
         panel.BackColor = Theme.Current.Surface;
 
-        var layout = new FlowLayoutPanel
+        // A table, not a right-to-left flow: the flow placed the label past the right edge at
+        // narrower window widths and the module name was clipped to "Junk Fi".
+        var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.RightToLeft,
-            WrapContents = false,
+            ColumnCount = 2,
+            RowCount = 1,
             BackColor = Theme.Current.Surface,
             Margin = Padding.Empty,
+            Padding = Padding.Empty,
         };
+
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _toolBadge = new Label
         {
@@ -299,7 +306,7 @@ BuildMenu();
         _toolModuleLabel = new Label
         {
             AutoSize = false,
-            Width = 320,
+            Dock = DockStyle.Fill,
             Height = 30,
             TextAlign = ContentAlignment.MiddleRight,
             ForeColor = Theme.Current.TextDim,
@@ -307,8 +314,10 @@ BuildMenu();
             Padding = new Padding(0, 0, 4, 0),
         };
 
-        layout.Controls.Add(_toolBadge);
-        layout.Controls.Add(_toolModuleLabel);
+        _toolBadge.Anchor = AnchorStyles.Right;
+
+        layout.Controls.Add(_toolModuleLabel, 0, 0);
+        layout.Controls.Add(_toolBadge, 1, 0);
         panel.Controls.Add(layout);
         UpdateToolToolbar();
         return panel;
@@ -574,26 +583,6 @@ private void RefreshDriveFilter()
         _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
         _grid.ColumnHeadersHeight = 30;
 
-        // Clipped column titles were a recurring defect, and hand-tuning MinimumWidth for each
-        // one just moves the problem when the font or DPI changes. Measure every header and
-        // give each column at least enough room for its own title, so a title can never be
-        // cut off no matter how narrow the window gets.
-        foreach (DataGridViewColumn column in _grid.Columns)
-        {
-            if (!column.Visible || string.IsNullOrEmpty(column.HeaderText))
-            {
-                continue;
-            }
-
-            int needed = TextRenderer.MeasureText(
-                column.HeaderText,
-                _grid.ColumnHeadersDefaultCellStyle.Font ?? _grid.Font,
-                new Size(int.MaxValue, int.MaxValue),
-            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
-
-            column.MinimumWidth = Math.Max(column.MinimumWidth, needed + 18);
-        }
-
         // The cell is sized to the icon and the icon is rendered at the cell's exact
         // pixel size, so GDI+ draws it 1:1. A fixed 32px icon in a fixed 38px row was
         // scaled by the grid at higher DPIs and came out squashed and clipped.
@@ -631,6 +620,29 @@ private void RefreshDriveFilter()
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "website", HeaderText = "Website", ToolTipText = "Website", FillWeight = 60, MinimumWidth = 110 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "comment", HeaderText = "Comment", ToolTipText = "Comment", FillWeight = 60, MinimumWidth = 110 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "uninstall", HeaderText = "Uninstall String", ToolTipText = "Registered uninstall command", Visible = false, FillWeight = 60, MinimumWidth = 200 });
+
+        // Numbers read better right-aligned, and the column stops looking empty next to the
+        // left-aligned text columns.
+        _grid.Columns["size"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+
+        // This must run *after* the columns exist. It used to sit before the Add calls, so it
+        // measured an empty collection and every header stayed at its hard-coded width - which
+        // is how clipped titles kept reappearing at other DPIs.
+        foreach (DataGridViewColumn column in _grid.Columns)
+        {
+            if (!column.Visible || string.IsNullOrEmpty(column.HeaderText))
+            {
+                continue;
+            }
+
+            int needed = TextRenderer.MeasureText(
+                column.HeaderText,
+                _grid.ColumnHeadersDefaultCellStyle.Font ?? _grid.Font,
+                new Size(int.MaxValue, int.MaxValue),
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+
+            column.MinimumWidth = Math.Max(column.MinimumWidth, needed + 18);
+        }
 
         _grid.CellValueNeeded += OnCellValueNeeded;
         _grid.CellFormatting += OnCellFormatting;
@@ -905,7 +917,7 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = "regedit.exe",
+                FileName = Native.SystemExecutable("regedit.exe"),
                 UseShellExecute = true,
                 ArgumentList = { app.Location.SubKey },
             });
@@ -1030,6 +1042,11 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
             ApplyFilter();
 
             string elevated = Program.IsElevated ? "elevated" : "not elevated";
+            if (RunContext.IsCrossUser)
+            {
+                elevated = $"elevated as {Environment.UserName} for {RunContext.InvokerUser}";
+            }
+
             SetStatus($"{apps.Count} programs found ({elevated}).");
             LogStore.Info($"Listed {apps.Count} installed programs.");
         }
@@ -1070,9 +1087,9 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
 
         _grid.Visible = false;
 
-        // "programs" and "traced" are backed by the main DataGridView; every other module brings
-        // its own control and its own search box, so the program filter row does not apply.
-        bool usesProgramGrid = key is "programs" or "traced";
+        // Only "programs" is backed by the main DataGridView; every other module brings its
+        // own control and its own search box, so the program filter row does not apply.
+        bool usesProgramGrid = key == "programs";
         bool isListModule = usesProgramGrid;
         _filters.Visible = isListModule;
         _toolbar.Visible = isListModule;
@@ -1111,6 +1128,44 @@ private void OnCellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
         {
             var panel = new HunterPanel();
             panel.SetNavigator(ShowModule);
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
+        else if (key == "traced")
+        {
+            _modules[key] = new TracedProgramsPanel();
+            _moduleHost.Controls.Add(_modules[key]);
+            _modules[key].Visible = true;
+        }
+        else if (key == "extensions")
+        {
+            var panel = new BrowserExtensionsPanel();
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
+        else if (key == "history")
+        {
+            var panel = new HistoryCleanerPanel();
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
+        else if (key == "junk")
+        {
+            var panel = new JunkPanel();
+            _modules[key] = panel;
+            _moduleHost.Controls.Add(panel);
+            panel.Visible = true;
+            BeginInvoke((Action)(async () => await panel.EnsureLoadedAsync()));
+        }
+        else if (key == "backup")
+        {
+            var panel = new BackupManagerPanel();
             _modules[key] = panel;
             _moduleHost.Controls.Add(panel);
             panel.Visible = true;
@@ -1544,6 +1599,14 @@ try
 
     private void UpdateSelection()
     {
+        if (_currentModule != "programs")
+        {
+            // The selection bar belongs to the program list. Leaving the last program's
+            // description under a Tools module reads as if it described that module.
+            _selectionInfo.Text = string.Empty;
+            return;
+        }
+
         var app = SelectedApp();
 
         // More than one row selected means the reviewed single-program flow no longer applies, so
@@ -2027,12 +2090,9 @@ try
 
     private void OpenQuarantineFolder()
     {
-        string dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "Sweep",
-            "Quarantine");
+        string? dir = Quarantine.ExistingBaseDirectory;
 
-        if (!Directory.Exists(dir))
+        if (dir is null)
         {
             MessageBox.Show(this, "The quarantine folder is empty - nothing has been quarantined yet.", "Sweep",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -2296,6 +2356,21 @@ ApplyTheme();
     {
         base.OnShown(e);
         _search.Focus();
+
+        // Say it once, plainly. The alternative is a window that quietly shows the
+        // administrator's per-user programs as if they belonged to the person who launched it.
+        if (RunContext.IsCrossUser)
+        {
+            MessageBox.Show(this,
+                $"Windows started Sweep as \"{Environment.UserName}\", not as \"{RunContext.InvokerUser}\".\r\n\r\n" +
+                "Per-user registry entries belong to this administrator account, not to that user, " +
+                "so they are skipped rather than showing the wrong person's programs. File leftovers " +
+                "are still scanned in that user's profile, and machine-wide programs are unaffected.\r\n\r\n" +
+                "To see that user's per-user programs, sign in as them and run Sweep again.",
+                "Sweep - different user",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)

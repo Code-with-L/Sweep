@@ -10,6 +10,9 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Must happen before anything derives a user name or profile path from the token.
+        RunContext.Initialize(args);
+
         if (args.Any(a => string.Equals(a, SelftestFlag, StringComparison.OrdinalIgnoreCase)))
         {
             return SelfTest.Run(args).GetAwaiter().GetResult();
@@ -84,6 +87,18 @@ internal static class Program
             foreach (var a in args)
             {
                 psi.ArgumentList.Add(a);
+            }
+
+            // If UAC hands the process to a different administrator account, these are the
+            // only record of whose programs and profile we are supposed to be working on.
+            foreach (string a in RunContext.ElevationArguments())
+            {
+                string prefix = a[..(a.IndexOf('=') + 1)];
+                if (!args.Any(existing =>
+                        existing.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                {
+                    psi.ArgumentList.Add(a);
+                }
             }
 
             psi.ArgumentList.Add(NoElevateFlag);

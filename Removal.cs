@@ -57,9 +57,16 @@ public static class Removal
     {
         return item.Target switch
         {
-            FileTarget file => quarantine is not null && item.Kind != ResidueKind.Shortcut
-                ? quarantine.QuarantineFile(file.Path)
-                : FileOps.DeleteFile(file.Path),
+            // Files and folders share FileTarget, so the item's kind decides which primitive
+            // runs. Handing a directory to File.Delete silently succeeds without doing
+            // anything, which is why leftovers used to "vanish" from the list and stay on disk.
+            FileTarget file => item.Kind == ResidueKind.Folder
+                ? (quarantine is not null
+                    ? quarantine.QuarantineDirectory(file.Path)
+                    : FileOps.DeleteDirectory(file.Path))
+                : (quarantine is not null && item.Kind != ResidueKind.Shortcut
+                    ? quarantine.QuarantineFile(file.Path)
+                    : FileOps.DeleteFile(file.Path)),
 
             RegistryKeyTarget key => RegistryResidueOps.DeleteKey(key.Location),
 
@@ -75,6 +82,14 @@ public static class Removal
 
     private static DeletionResult DeleteService(string name)
     {
+        // The SCM has to be told. Deleting only the registry key leaves the cached service
+        // entry in place, so it keeps showing up until the next restart.
+        if (ServiceOps.Delete(name, out string scmError))
+        {
+            return new DeletionResult(true, name, false, null);
+        }
+
+        // An orphaned key with no SCM entry is still cleanup worth doing.
         try
         {
             using var root = Microsoft.Win32.RegistryKey.OpenBaseKey(
@@ -87,7 +102,7 @@ public static class Removal
         }
         catch (Exception ex)
         {
-            return new DeletionResult(false, name, false, ex.Message);
+            return new DeletionResult(false, name, false, $"{scmError}; registry: {ex.Message}");
         }
     }
 
@@ -97,7 +112,7 @@ public static class Removal
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "schtasks.exe",
+                FileName = Native.SystemExecutable("schtasks.exe"),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,

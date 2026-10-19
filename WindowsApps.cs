@@ -133,7 +133,11 @@ public static class WindowsApps
 
     public static DeletionResult Remove(WindowsApp app)
     {
-        string script = $"Remove-AppxPackage -Package '{app.PackageFullName}' -ErrorAction Stop";
+        // PowerShell escapes a single quote by doubling it. Package names cannot contain one
+        // today, but this is the only thing standing between a registry-provided value and a
+        // command interpreter running as Administrator.
+        string package = app.PackageFullName.Replace("'", "''", StringComparison.Ordinal);
+        string script = $"Remove-AppxPackage -Package '{package}' -ErrorAction Stop";
 
         try
         {
@@ -152,7 +156,7 @@ public static class WindowsApps
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = Native.PowerShellExecutable,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

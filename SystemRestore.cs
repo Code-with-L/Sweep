@@ -5,7 +5,7 @@ internal static class SystemRestore
     public static bool TryCreate(string appName, out string message)
     {
         string title = $"Before removing {appName} - {DateTime.Now:yyyy-MM-dd HH:mm}";
-        if (Native.TryCreateRestorePoint(title, out int eventId, out string error))
+        if (Native.TryCreateRestorePoint(title, out long eventId, out string error))
         {
             message = $"Restore point created (event {eventId}).";
             LogStore.Success(message);

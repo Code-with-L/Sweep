@@ -216,8 +216,8 @@ public static class NameTokens
     /// which matches the user's own home-directory paths.
     /// </summary>
     private static bool IsUserName(string token) =>
-        Environment.UserName.Length > 0 &&
-        token.Equals(Environment.UserName, StringComparison.OrdinalIgnoreCase);
+        RunContext.EffectiveUserName.Length > 0 &&
+        token.Equals(RunContext.EffectiveUserName, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Search tokens derived from the product name.

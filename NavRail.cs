@@ -13,8 +13,8 @@ internal sealed record NavItem(
 /// a short description for each so the Description Panel has something honest to show before
 /// a module is even opened.
 ///
-/// Every entry that is a stub returns false from <see cref="IsAvailable"/>, so the rail never
-/// advertises a module that cannot open.
+/// The rail only lists modules that actually open. Advertising a feature and then saying
+/// "not built yet" is worse than not listing it at all: it makes the whole tool look broken.
 /// </summary>
 internal sealed class NavRail : Panel
 {
@@ -247,23 +247,23 @@ internal sealed class NavRail : Panel
         new("programs", "All Programs", "Uninstaller", ModuleIcons.Glyph.Programs,
             "All installed programs and components, for the current user and for every user on the machine, grouped into recently installed and the rest."),
         new("traced", "Traced Programs", "Uninstaller", ModuleIcons.Glyph.Traced,
-            "Programs recorded by the installation monitor, with the files and registry entries they added. Lets you remove something whose uninstaller never registered."),
+            "Run an installer once and see the folders and registry keys it added. The changes can be quarantined in one step."),
         new("apps", "Windows Apps", "Uninstaller", ModuleIcons.Glyph.Store,
             "Store and packaged apps, including provisioning. Some can be reset to their shipped state instead of removed outright."),
         new("extensions", "Browser Extensions", "Uninstaller", ModuleIcons.Glyph.Extension,
-            "Add-ons installed into Chrome, Edge and Firefox profiles. These uninstall from the browser itself rather than through Add or Remove Programs."),
+            "Add-ons installed in Chrome, Edge, Brave, Vivaldi and Firefox profiles. Chromium extensions can be moved to quarantine; Firefox entries are managed in the browser."),
         new("hunter", "Hunter Mode", "Uninstaller", ModuleIcons.Glyph.Hunter,
-            "Shows every running process with its executable, parent and open handles, so you can see what a stubborn program is actually doing before killing it."),
+            "Shows every running process with its executable and install folder, so you can see what a stubborn program is actually doing before killing it."),
         new("autorun", "Autorun Manager", "Tools", ModuleIcons.Glyph.Autorun,
             "Startup programs, services and scheduled tasks. Disable, delete or add entries and keep a record of what you changed."),
         new("junk", "Junk Files Cleaner", "Tools", ModuleIcons.Glyph.Junk,
-            "Temporary files, caches, old logs, thumbnails and crash dumps across all drives, with a running total of what is recoverable."),
+            "Temporary files, crash dumps, thumbnail and shader caches, with the total shown before anything is deleted."),
         new("wintools", "Windows Tools", "Tools", ModuleIcons.Glyph.Tools,
             "The built-in Windows utilities, grouped by what they are for, each with its command line shown so you can reuse it. Add your own."),
         new("history", "History Cleaner", "Tools", ModuleIcons.Glyph.History,
-            "Clears browsing history, cookies, caches, form and download history per browser, plus Windows recent items and Office document history."),
+            "Browser history stores and the Windows recent-items list, moved to quarantine so an accidental clean can be undone."),
         new("backup", "Backup Manager", "Tools", ModuleIcons.Glyph.Backup,
-            "Registry and file backups taken before removals, with the ability to put any of them back exactly as they were."),
+            "Quarantine sessions taken before removals: what each one holds, when it was made, and a button to put it back."),
     ];
 
     /// <summary>

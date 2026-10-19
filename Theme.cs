@@ -1,4 +1,6 @@
 using System.Drawing.Drawing2D;
+using System.Text;
+using System.Windows.Forms.VisualStyles;
 
 namespace Sweep;
 
@@ -107,6 +109,63 @@ internal static class Theme
         list.DrawSubItem += OnListDrawSubItem;
         list.DrawColumnHeader += OnListDrawHeader;
         list.OwnerDraw = true;
+
+        // Native scrollbars stay light grey otherwise, including the corner block above the
+        // vertical bar, which reads as a hole in a dark list.
+        list.HandleCreated -= OnListHandleCreated;
+        list.HandleCreated += OnListHandleCreated;
+        if (list.IsHandleCreated)
+        {
+            ApplyScrollbarTheme(list);
+        }
+    }
+
+    private static void OnListHandleCreated(object? sender, EventArgs e)
+    {
+        if (sender is ListView list)
+        {
+            ApplyScrollbarTheme(list);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("uxtheme.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string? pszSubIdList);
+
+    private delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool EnumChildWindows(IntPtr parent, EnumChildProc callback, IntPtr lParam);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder text, int maxCount);
+
+    private static void ApplyScrollbarTheme(ListView list)
+    {
+        try
+        {
+            bool dark = Mode == ThemeMode.Dark;
+            SetWindowTheme(list.Handle, dark ? "DarkMode_Explorer" : "Explorer", null);
+
+            // The header is a separate child window. Its unused right edge is painted with the
+            // default light background, which is the white block that appeared beside the last
+            // column; theming it dark removes it without adding a horizontal scrollbar.
+            EnumChildWindows(list.Handle, (child, _) =>
+            {
+                var name = new StringBuilder(256);
+                GetClassName(child, name, 256);
+                if (name.ToString().Contains("SysHeader32", StringComparison.OrdinalIgnoreCase))
+                {
+                    SetWindowTheme(child, dark ? "DarkMode_ItemsView" : "Explorer", null);
+                }
+
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch
+        {
+            // Older builds without the dark themes just keep the default colours.
+        }
     }
 
     private static void OnListDrawHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
@@ -172,6 +231,29 @@ private static void OnListDrawSubItem(object? sender, DrawListViewSubItemEventAr
         };
 
         var area = new RectangleF(e.Bounds.X + 4, e.Bounds.Y, Math.Max(1, e.Bounds.Width - 8), e.Bounds.Height);
+
+        // Owner-draw replaces the native painting completely, including the check box. Without
+        // this the checkable lists (leftovers, junk, history, traces) showed no tick at all -
+        // the state was there and clickable, but invisible.
+        if (e.ColumnIndex == 0 && list.CheckBoxes && e.Item is not null)
+        {
+            CheckBoxState state = e.Item.Checked
+                ? CheckBoxState.CheckedNormal
+                : CheckBoxState.UncheckedNormal;
+
+            Size glyph = CheckBoxRenderer.GetGlyphSize(e.Graphics, state);
+            int top = e.Bounds.Y + Math.Max(0, (e.Bounds.Height - glyph.Height) / 2);
+            var point = new Point(e.Bounds.X + 4, top);
+            CheckBoxRenderer.DrawCheckBox(e.Graphics, point, state);
+
+            int textLeft = point.X + glyph.Width + 6;
+            area = new RectangleF(
+                textLeft,
+                e.Bounds.Y,
+                Math.Max(1, e.Bounds.Right - textLeft - 4),
+                e.Bounds.Height);
+        }
+
         e.Graphics.DrawString(e.SubItem?.Text ?? string.Empty, list.Font, text, area, format);
     }
 
